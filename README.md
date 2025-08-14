@@ -165,8 +165,8 @@ The application has four main tabs:
 Some operations require administrator privileges:
 
 1. **Automatic Detection**: The app detects when sudo is needed
-2. **Password Dialog**: Enter your password when prompted
-3. **Secure Handling**: Passwords are processed locally and never stored
+2. **Current Workaround**: When sudo is required, enter your password in the terminal where you launched the application
+3. **Future Enhancement**: In-app sudo password handling is planned (see TODO section)
 
 ### Activity Panel
 
@@ -231,7 +231,7 @@ Long-running operations use Server-Sent Events for real-time feedback:
 
 2. **Permission Errors**:
    - Some operations require sudo privileges
-   - Enter your password when prompted by the application
+   - Enter your password in the terminal where you launched the application when prompted
 
 3. **Port Already in Use**:
    - Change the port: `PORT=8080 python3 server.py`
@@ -286,6 +286,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - [ ] **Package Categories**: Organize packages by category (development, utilities, etc.)
 - [ ] **Export/Import**: Export package lists and import them on other systems
 - [ ] **Backup/Restore**: Create backups of current package state
+- [ ] **Sudo Password Integration**: Fix in-app sudo password handling for seamless administrative operations
 
 ### Medium Priority
 - [ ] **Custom Taps Support**: Manage custom Homebrew taps
