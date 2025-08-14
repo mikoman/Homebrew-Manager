@@ -2,12 +2,129 @@ const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 let OUTDATED_SET = new Set();
 
+// Helpers for robust name/description handling (casks sometimes use arrays)
+function getItemKeyName(it) {
+  let n = it && it.name;
+  if (Array.isArray(n)) n = n[0] || '';
+  if (!n) n = (it && (it.full_name || it.token)) || '';
+  return String(n || '');
+}
+function getItemDesc(it) {
+  let d = it && it.desc;
+  if (Array.isArray(d)) d = d.join(', ');
+  return String(d || '');
+}
+
+function shouldPromptSudo(message = '') {
+  const msg = String(message || '').toLowerCase();
+  if (msg.includes('| requires_sudo') || msg.includes('must be run as root') || msg.includes('requires administrator access')) return true;
+  if (msg.includes('sudo: a password is required') || msg.includes('either use the -s option') || msg.includes('askpass')) return true;
+  const root = document.getElementById('activity-log');
+  if (root) {
+    const lines = Array.from(root.querySelectorAll('.activity-line .text')).slice(-20).map(n => n.textContent.toLowerCase());
+    if (lines.some(t => t.includes('sudo: a password is required') || t.includes('requires administrator access') || t.includes('must be run as root') || t.includes('askpass'))) return true;
+  }
+  return false;
+}
+
 function toast(msg, timeout = 2500) {
   const el = $('#toast');
   el.textContent = msg;
   el.classList.add('show');
   setTimeout(() => el.classList.remove('show'), timeout);
 }
+
+// Password dialog for sudo operations
+let currentSudoCallback = null;
+
+function showPasswordDialog(operation, packageName) {
+  return new Promise((resolve, reject) => {
+    // Remove any existing dialog
+    const existing = document.getElementById('sudo-dialog');
+    if (existing) existing.remove();
+
+    // Create dialog
+    const dialog = document.createElement('div');
+    dialog.id = 'sudo-dialog';
+    dialog.className = 'sudo-dialog-overlay';
+    
+    dialog.innerHTML = `
+      <div class="sudo-dialog">
+        <div class="sudo-header">
+          <h3>Administrator Password Required</h3>
+          <button class="sudo-close" type="button">×</button>
+        </div>
+        <div class="sudo-content">
+          <p class="sudo-message">
+            <strong>${packageName}</strong> requires administrator privileges to ${operation}.
+          </p>
+          <div class="sudo-warning">
+            ⚠️ Your password is processed locally and never stored or transmitted.
+          </div>
+          <div class="sudo-input-group">
+            <label for="sudo-password">Enter your password:</label>
+            <input type="password" id="sudo-password" class="sudo-password-input" placeholder="Password" autocomplete="current-password">
+          </div>
+          <div class="sudo-buttons">
+            <button type="button" class="btn" id="sudo-cancel">Cancel</button>
+            <button type="button" class="btn primary" id="sudo-confirm">Continue</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    const passwordInput = dialog.querySelector('#sudo-password');
+    const confirmBtn = dialog.querySelector('#sudo-confirm');
+    const cancelBtn = dialog.querySelector('#sudo-cancel');
+    const closeBtn = dialog.querySelector('.sudo-close');
+
+    // Focus password input
+    setTimeout(() => passwordInput.focus(), 100);
+
+    // Handle confirm
+    const handleConfirm = () => {
+      const password = passwordInput.value;
+      if (!password) {
+        passwordInput.focus();
+        return;
+      }
+      dialog.remove();
+      resolve(password);
+    };
+
+    // Handle cancel
+    const handleCancel = () => {
+      dialog.remove();
+      reject(new Error('User cancelled'));
+    };
+
+    // Event listeners
+    confirmBtn.addEventListener('click', handleConfirm);
+    cancelBtn.addEventListener('click', handleCancel);
+    closeBtn.addEventListener('click', handleCancel);
+    
+    // Enter key submits
+    passwordInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleConfirm();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        handleCancel();
+      }
+    });
+
+    // Click outside to cancel
+    dialog.addEventListener('click', (e) => {
+      if (e.target === dialog) {
+        handleCancel();
+      }
+    });
+  });
+}
+
 
 function withButtonLoading(button, fn) {
   return (async () => {
@@ -65,6 +182,8 @@ function streamSSE(url, { onStart, onLog, onEnd, onError } = {}) {
 
 function renderOutdated(data) {
   const root = $('#outdated-list');
+  const header = $('#outdated-header');
+  const hint = $('#outdated-hint');
   root.innerHTML = '';
   const { formulae = [], casks = [] } = data || {};
   const all = [
@@ -72,12 +191,20 @@ function renderOutdated(data) {
     ...casks.map(x => ({ ...x, __type: 'cask' })),
   ];
   // Build a set of outdated names for use in Installed panel
-  OUTDATED_SET = new Set(all.map(it => it.name || it.full_name));
+  OUTDATED_SET = new Set(all.map(it => getItemKeyName(it)));
   if (!all.length) {
-    root.innerHTML = `<div class="empty">All up to date 🎉</div>`;
+    // Hide the entire outdated section when nothing is outdated
+    if (header) header.style.display = 'none';
+    if (hint) hint.style.display = 'none';
+    root.style.display = 'none';
+    root.innerHTML = '';
     OUTDATED_SET = new Set();
     return;
   }
+  // Ensure visible when there are items
+  if (header) header.style.display = '';
+  if (hint) hint.style.display = '';
+  root.style.display = '';
   for (const item of all) {
     const name = item.name || item.full_name;
     const current = item.current_version || item.current_cask_version || item.current_formula_version;
@@ -85,8 +212,11 @@ function renderOutdated(data) {
 
     const card = document.createElement('div');
     card.className = 'card';
+    const description = item.desc && item.desc.trim() ? item.desc : '';
+    
     card.innerHTML = `
       <div class="title"><label><input type="checkbox" data-kind="${item.__type}" data-name="${name}" /> ${name}</label></div>
+      ${description ? `<div class="description">${description}</div>` : ''}
       <div class="subtitle">${item.__type} • Current: ${current || 'n/a'} • Installed: ${installed || 'n/a'}</div>
       <div class="badges">
         ${item.pinned ? '<span class="badge warn">Pinned</span>' : ''}
@@ -114,7 +244,8 @@ function renderOrphaned(data) {
     card.className = 'card';
     card.innerHTML = `
       <div class="title">${item.name}</div>
-      <div class="subtitle">formula • ${item.desc || ''}</div>
+      ${item.desc ? `<div class="description">${item.desc}</div>` : ''}
+      <div class="subtitle">formula</div>
       <div class="badges">
         <span class="badge">Leaf</span>
         <span class="badge">Dependency-only</span>
@@ -143,11 +274,11 @@ function renderDeprecated(data) {
     card.className = 'card';
     card.innerHTML = `
       <div class="title">${item.name}</div>
+      ${item.desc ? `<div class="description">${item.desc}</div>` : ''}
       <div class="subtitle">${item.__type}${item.deprecated ? ' • deprecated' : ''}${item.disabled ? ' • disabled' : ''}</div>
       <div class="badges">
         ${item.deprecation_date ? `<span class="badge warn">Since ${item.deprecation_date}</span>` : ''}
       </div>
-      ${item.desc ? `<div class="subtitle">${item.desc}</div>` : ''}
       ${item.homepage ? `<div class="controls"><a class="btn small" href="${item.homepage}" target="_blank" rel="noopener noreferrer">Homepage</a></div>` : ''}
     `;
     root.appendChild(card);
@@ -163,17 +294,57 @@ function renderInstalled(data) {
     ...formulae.map(x => ({ ...x, __type: 'formula' })),
     ...casks.map(x => ({ ...x, __type: 'cask' })),
   ];
+  // Persist current set for client-side filtering
+  window.__INSTALLED_CACHE__ = all;
   if (!all.length) {
     root.innerHTML = `<div class="empty">Nothing installed</div>`;
     return;
   }
   for (const item of all) {
-    const name = item.name || item.full_name;
+    const name = getItemKeyName(item);
     const version = (item.versions && item.versions.stable) || item.version || '';
+    const descStr = getItemDesc(item);
+    const description = descStr && descStr.trim() ? descStr : '';
     const card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = `
       <div class="title">${name}</div>
+      ${description ? `<div class="description">${description}</div>` : ''}
+      <div class="subtitle">${item.__type}${version ? ` • ${version}` : ''}</div>
+      <div class="controls">
+        ${OUTDATED_SET.has(name) ? `<button class="btn small" data-upgrade-one-name="${name}" data-upgrade-one-kind="${item.__type}">Upgrade</button>` : ''}
+        <button class="btn small" data-uninstall-name="${name}" data-uninstall-kind="${item.__type}">Uninstall</button>
+      </div>
+    `;
+    root.appendChild(card);
+  }
+}
+
+function applyInstalledFilter() {
+  const q = ($('#installed-search')?.value || '').trim().toLowerCase();
+  const items = window.__INSTALLED_CACHE__ || [];
+  const root = $('#installed-list');
+  if (!root) return;
+  root.innerHTML = '';
+  const filtered = q ? items.filter(it => {
+    const name = getItemKeyName(it).toLowerCase();
+    const desc = getItemDesc(it).toLowerCase();
+    return name.includes(q) || desc.includes(q);
+  }) : items;
+  if (!filtered.length) {
+    root.innerHTML = `<div class="empty">No matches</div>`;
+    return;
+  }
+  for (const item of filtered) {
+    const name = getItemKeyName(item);
+    const version = (item.versions && item.versions.stable) || item.version || '';
+    const descStr = getItemDesc(item);
+    const description = descStr && descStr.trim() ? descStr : '';
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <div class="title">${name}</div>
+      ${description ? `<div class="description">${description}</div>` : ''}
       <div class="subtitle">${item.__type}${version ? ` • ${version}` : ''}</div>
       <div class="controls">
         ${OUTDATED_SET.has(name) ? `<button class="btn small" data-upgrade-one-name="${name}" data-upgrade-one-kind="${item.__type}">Upgrade</button>` : ''}
@@ -210,7 +381,11 @@ async function refreshSummary() {
     const deprecated = await api('/api/deprecated');
     renderDeprecated(deprecated);
     activityAppend('log', 'Deprecated loaded');
-    activityAppend('end', 'Summary ready');
+    // Clear all previous messages and show only the completion status
+    requestAnimationFrame(() => {
+      activityClear();
+      activityAppend('end', 'Loading complete');
+    });
   } catch (e) {
     activityAppend('error', e.message || 'Failed to load');
     toast(e.message || 'Failed to load');
@@ -240,7 +415,25 @@ async function doUpdate() {
     streamSSE('/api/update_stream', {
       onStart: (m) => activityAppend('start', m),
       onLog: (m) => activityAppend('log', m),
-      onEnd: async () => { activityAppend('end', 'Update complete'); toast('Update complete'); await refreshSummary(); resolve(); },
+      onEnd: async () => { 
+        requestAnimationFrame(() => {
+          activityClear();
+          activityAppend('end', 'Update complete');
+        });
+        toast('Update complete'); 
+        await refreshSummary();
+        // Check if update button should be hidden after update
+        try {
+          const health = await api('/api/health');
+          const updateBtn = $('#btn-update');
+          if (!health?.needs_update) {
+            updateBtn.style.display = 'none';
+          }
+        } catch (e) {
+          // Ignore health check errors after update
+        }
+        resolve(); 
+      },
       onError: async (m) => {
         // Fallback to non-streaming API
         try {
@@ -249,9 +442,22 @@ async function doUpdate() {
             const lines = String(res.log).split(/\r?\n/);
             for (const line of lines) if (line.trim()) activityAppend('log', line);
           }
-          activityAppend('end', 'Update complete');
+          requestAnimationFrame(() => {
+            activityClear();
+            activityAppend('end', 'Update complete');
+          });
           toast('Update complete');
           await refreshSummary();
+          // Check if update button should be hidden after update
+          try {
+            const health = await api('/api/health');
+            const updateBtn = $('#btn-update');
+            if (!health?.needs_update) {
+              updateBtn.style.display = 'none';
+            }
+          } catch (e) {
+            // Ignore health check errors after update
+          }
         } catch (e) {
           activityAppend('error', m || e.message || 'Update failed');
           toast(m || e.message || 'Update failed');
@@ -284,8 +490,79 @@ async function doUpgradeSelected() {
     streamSSE(url, {
       onStart: (m) => activityAppend('start', m),
       onLog: (m) => activityAppend('log', m),
-      onEnd: async () => { activityAppend('end', 'Upgrade complete'); toast('Upgrade complete'); await refreshPackagesOnly(); resolve(); },
+      onEnd: async () => { 
+        requestAnimationFrame(() => {
+          activityClear();
+          activityAppend('end', 'Upgrade complete');
+        });
+        toast('Upgrade complete'); 
+        await refreshPackagesOnly(); 
+        resolve(); 
+      },
       onError: async (m) => {
+        // Check if error requires sudo password
+        if (shouldPromptSudo(m)) {
+          try {
+            const password = await showPasswordDialog('upgrade', formulae.concat(casks).join(', ') || 'selected packages');
+            activityClear();
+            activityAppend('start', 'Retrying upgrade with authentication...');
+            // Retry with password using POST to streaming endpoint
+            const response = await fetch('/api/upgrade_stream', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ formulae, casks, sudo_password: password })
+            });
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let currentEvent = '';
+            
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || '';
+              
+              for (const line of lines) {
+                if (line.startsWith('event: ')) {
+                  currentEvent = line.slice(7);
+                  continue;
+                }
+                if (line.startsWith('data: ')) {
+                  const data = line.slice(6);
+                  if (currentEvent === 'start') activityAppend('start', data);
+                  else if (currentEvent === 'log') activityAppend('log', data);
+                  else if (currentEvent === 'end') {
+                    requestAnimationFrame(() => {
+                      activityClear();
+                      activityAppend('end', 'Upgrade complete');
+                    });
+                    toast('Upgrade complete');
+                    await refreshPackagesOnly();
+                    resolve();
+                    return;
+                  }
+                  else if (currentEvent === 'error') {
+                    activityAppend('error', data);
+                    toast('Upgrade failed');
+                    resolve();
+                    return;
+                  }
+                }
+              }
+            }
+          } catch (passwordErr) {
+            if (passwordErr.message !== 'User cancelled') {
+              activityAppend('error', 'Authentication failed');
+              toast('Authentication failed');
+            }
+            resolve();
+            return;
+          }
+        }
+        
         // Fallback to non-streaming API
         try {
           const res = await api('/api/upgrade', { method: 'POST', body: JSON.stringify({ formulae, casks }) });
@@ -298,7 +575,10 @@ async function doUpgradeSelected() {
             const lines = String(block).split(/\r?\n/);
             for (const line of lines) if (line.trim()) activityAppend('log', line);
           }
-          activityAppend('end', 'Upgrade complete');
+          requestAnimationFrame(() => {
+            activityClear();
+            activityAppend('end', 'Upgrade complete');
+          });
           toast('Upgrade complete');
           await refreshPackagesOnly();
         } catch (e) {
@@ -323,8 +603,8 @@ async function doSearch() {
     const res = await api(`/api/search?q=${encodeURIComponent(q)}`);
     activityAppend('log', 'Search results received');
     const items = [
-      ...res.formulae.map(x => ({ name: x, __type: 'formula' })),
-      ...res.casks.map(x => ({ name: x, __type: 'cask' })),
+      ...res.formulae.map(x => ({ name: x.name || x, desc: x.desc || '', __type: 'formula' })),
+      ...res.casks.map(x => ({ name: x.name || x, desc: x.desc || '', __type: 'cask' })),
     ];
     if (!items.length) {
       root.innerHTML = `<div class="empty">No results</div>`;
@@ -336,6 +616,7 @@ async function doSearch() {
       card.className = 'card';
       card.innerHTML = `
         <div class="title">${item.name}</div>
+        ${item.desc ? `<div class="description">${item.desc}</div>` : ''}
         <div class="subtitle">${item.__type}</div>
         <div class="controls">
           <button class="btn small" data-install-name="${item.name}" data-install-kind="${item.__type}">Install</button>
@@ -344,7 +625,10 @@ async function doSearch() {
       `;
       root.appendChild(card);
     }
-    activityAppend('end', `Rendered ${items.length} result(s)`);
+    requestAnimationFrame(() => {
+      activityClear();
+      activityAppend('end', `Found ${items.length} result(s)`);
+    });
   } catch (e) {
     activityAppend('error', e.message);
     toast(e.message);
@@ -361,7 +645,15 @@ async function handleInstall(name, kind) {
     streamSSE(`/api/install_stream?${params.toString()}`, {
       onStart: (m) => activityAppend('start', m),
       onLog: (m) => activityAppend('log', m),
-      onEnd: async () => { activityAppend('end', 'Installed'); toast('Installed'); await refreshSummary(); resolve(); },
+      onEnd: async () => { 
+        requestAnimationFrame(() => {
+          activityClear();
+          activityAppend('end', 'Installed');
+        });
+        toast('Installed'); 
+        await refreshSummary(); 
+        resolve(); 
+      },
       onError: async (m) => {
         try {
           const res = await api('/api/install', { method: 'POST', body: JSON.stringify({ name, type: kind }) });
@@ -369,7 +661,10 @@ async function handleInstall(name, kind) {
             const lines = String(res.log).split(/\r?\n/);
             for (const line of lines) if (line.trim()) activityAppend('log', line);
           }
-          activityAppend('end', 'Installed');
+          requestAnimationFrame(() => {
+            activityClear();
+            activityAppend('end', 'Installed');
+          });
           toast('Installed');
           await refreshSummary();
         } catch (e) {
@@ -397,11 +692,46 @@ async function handleInfo(name, kind) {
 
 function initEvents() {
   $$('.tab').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
-  $('#btn-refresh').addEventListener('click', (e) => withButtonLoading(e.currentTarget, refreshSummary));
   $('#btn-update').addEventListener('click', (e) => withButtonLoading(e.currentTarget, doUpdate));
   $('#btn-upgrade-selected').addEventListener('click', (e) => withButtonLoading(e.currentTarget, doUpgradeSelected));
   $('#btn-search').addEventListener('click', (e) => withButtonLoading(e.currentTarget, doSearch));
   $('#search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+  
+  // Search input clear functionality
+  const searchInput = $('#search-input');
+  const searchClear = $('#search-input-clear');
+  const installedSearch = $('#installed-search');
+  const installedClear = $('#installed-search-clear');
+  
+  // Show/hide clear buttons based on input content
+  function updateClearButton(input, clearBtn) {
+    if (input && clearBtn) {
+      clearBtn.style.display = input.value.trim() ? 'block' : 'none';
+    }
+  }
+  
+  if (searchInput && searchClear) {
+    searchInput.addEventListener('input', () => updateClearButton(searchInput, searchClear));
+    searchClear.addEventListener('click', () => {
+      searchInput.value = '';
+      updateClearButton(searchInput, searchClear);
+      $('#search-results').innerHTML = '';
+      searchInput.focus();
+    });
+  }
+  
+  if (installedSearch && installedClear) {
+    installedSearch.addEventListener('input', () => {
+      updateClearButton(installedSearch, installedClear);
+      applyInstalledFilter();
+    });
+    installedClear.addEventListener('click', () => {
+      installedSearch.value = '';
+      updateClearButton(installedSearch, installedClear);
+      applyInstalledFilter();
+      installedSearch.focus();
+    });
+  }
   $('#chk-select-all')?.addEventListener('change', (e) => {
     const checked = e.currentTarget.checked;
     $$('#outdated-list input[type="checkbox"][data-name]').forEach(b => { b.checked = checked; });
@@ -432,8 +762,79 @@ function initEvents() {
           streamSSE(url, {
             onStart: (m) => activityAppend('start', m),
             onLog: (m) => activityAppend('log', m),
-            onEnd: async () => { activityAppend('end', 'Upgrade complete'); toast('Upgrade complete'); await refreshPackagesOnly(); resolve(); },
+            onEnd: async () => { 
+              requestAnimationFrame(() => {
+                activityClear();
+                activityAppend('end', 'Upgrade complete');
+              });
+              toast('Upgrade complete'); 
+              await refreshPackagesOnly(); 
+              resolve(); 
+            },
             onError: async (m) => {
+              // Check if error requires sudo password
+              if (shouldPromptSudo(m)) {
+                try {
+                  const password = await showPasswordDialog('upgrade', name);
+                  activityClear();
+                  activityAppend('start', 'Retrying upgrade with authentication...');
+                  // Retry with password using POST to streaming endpoint
+                  const response = await fetch('/api/upgrade_stream', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ formulae, casks, sudo_password: password })
+                  });
+                  const reader = response.body.getReader();
+                  const decoder = new TextDecoder();
+                  let buffer = '';
+                  let currentEvent = '';
+                  
+                  while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+                    
+                    for (const line of lines) {
+                      if (line.startsWith('event: ')) {
+                        currentEvent = line.slice(7);
+                        continue;
+                      }
+                      if (line.startsWith('data: ')) {
+                        const data = line.slice(6);
+                        if (currentEvent === 'start') activityAppend('start', data);
+                        else if (currentEvent === 'log') activityAppend('log', data);
+                        else if (currentEvent === 'end') {
+                          requestAnimationFrame(() => {
+                            activityClear();
+                            activityAppend('end', 'Upgrade complete');
+                          });
+                          toast('Upgrade complete');
+                          await refreshPackagesOnly();
+                          resolve();
+                          return;
+                        }
+                        else if (currentEvent === 'error') {
+                          activityAppend('error', data);
+                          toast('Upgrade failed');
+                          resolve();
+                          return;
+                        }
+                      }
+                    }
+                  }
+                } catch (passwordErr) {
+                  if (passwordErr.message !== 'User cancelled') {
+                    activityAppend('error', 'Authentication failed');
+                    toast('Authentication failed');
+                  }
+                  resolve();
+                  return;
+                }
+              }
+              
               try {
                 const res = await api('/api/upgrade', { method: 'POST', body: JSON.stringify({ formulae, casks }) });
                 const logs = res?.logs || {};
@@ -445,7 +846,10 @@ function initEvents() {
                   const lines = String(block).split(/\r?\n/);
                   for (const line of lines) if (line.trim()) activityAppend('log', line);
                 }
-                activityAppend('end', 'Upgrade complete');
+                requestAnimationFrame(() => {
+            activityClear();
+            activityAppend('end', 'Upgrade complete');
+          });
                 toast('Upgrade complete');
                 await refreshPackagesOnly();
               } catch (e) {
@@ -464,6 +868,38 @@ function initEvents() {
     if (del) withButtonLoading(del, () => handleUninstall(del.dataset.uninstallName, del.dataset.uninstallKind || 'formula'));
   });
   $('#btn-activity-clear').addEventListener('click', activityClear);
+  // Note: Installed filter input handling is now managed above with clear button
+  // Settings modal events
+  const settingsBtn = $('#btn-settings');
+  const settingsModal = $('#settings-modal');
+  const settingsClose = settingsModal?.querySelector('.sudo-close');
+  const settingsCancel = $('#settings-cancel');
+  const settingsSave = $('#settings-save');
+  const settingsInput = $('#settings-sudo-password');
+  if (settingsBtn && settingsModal) {
+    settingsBtn.addEventListener('click', () => {
+      settingsModal.style.display = 'flex';
+      setTimeout(() => settingsInput?.focus(), 100);
+    });
+    const closeModal = () => { settingsModal.style.display = 'none'; };
+    settingsClose?.addEventListener('click', closeModal);
+    settingsCancel?.addEventListener('click', closeModal);
+    settingsModal.addEventListener('click', (e) => { if (e.target === settingsModal) closeModal(); });
+    settingsSave?.addEventListener('click', async () => {
+      const pwd = settingsInput.value;
+      if (!pwd) { settingsInput.focus(); return; }
+      try {
+        const res = await api('/api/sudo/validate', { method: 'POST', body: JSON.stringify({ sudo_password: pwd }) });
+        if (!res.ok && res.error) throw new Error(res.error);
+        // Save in-memory for this session
+        window.__SUDO_PWD__ = pwd;
+        toast('Sudo password saved for this session');
+        settingsModal.style.display = 'none';
+      } catch (e) {
+        toast(e.message || 'Failed to validate password');
+      }
+    });
+  }
 }
 
 async function handleUninstall(name, kind = 'formula') {
@@ -475,7 +911,15 @@ async function handleUninstall(name, kind = 'formula') {
     streamSSE(`/api/uninstall_stream?${params.toString()}`, {
       onStart: (m) => activityAppend('start', m),
       onLog: (m) => activityAppend('log', m),
-      onEnd: async () => { activityAppend('end', 'Uninstalled'); toast('Uninstalled'); await refreshSummary(); resolve(); },
+      onEnd: async () => { 
+        requestAnimationFrame(() => {
+          activityClear();
+          activityAppend('end', 'Uninstalled');
+        });
+        toast('Uninstalled'); 
+        await refreshSummary(); 
+        resolve(); 
+      },
       onError: async (m) => {
         try {
           const res = await api('/api/uninstall', { method: 'POST', body: JSON.stringify({ name, type: kind }) });
@@ -483,7 +927,10 @@ async function handleUninstall(name, kind = 'formula') {
             const lines = String(res.log).split(/\r?\n/);
             for (const line of lines) if (line.trim()) activityAppend('log', line);
           }
-          activityAppend('end', 'Uninstalled');
+          requestAnimationFrame(() => {
+            activityClear();
+            activityAppend('end', 'Uninstalled');
+          });
           toast('Uninstalled');
           await refreshSummary();
         } catch (e) {
@@ -503,9 +950,22 @@ async function boot() {
     activityAppend('start', 'Checking server health...');
     const health = await api('/api/health');
     activityAppend('log', `Server OK • ${health?.brew || ''}`);
+    
+    // Show/hide update button based on whether homebrew needs updating
+    const updateBtn = $('#btn-update');
+    if (health?.needs_update) {
+      updateBtn.style.display = 'inline-flex';
+      activityAppend('log', 'Homebrew update available');
+    } else {
+      updateBtn.style.display = 'none';
+      activityAppend('log', 'Homebrew is up to date');
+    }
   } catch (e) {
     activityAppend('error', e.message || 'Server not reachable');
     toast(e.message || 'Server not reachable');
+    // Hide update button on error
+    const updateBtn = $('#btn-update');
+    if (updateBtn) updateBtn.style.display = 'none';
   }
   await refreshSummary();
 }

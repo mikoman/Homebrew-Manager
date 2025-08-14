@@ -4,15 +4,17 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Homebrew Manager</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <header class="app-header">
     <div class="brand">🍺 Homebrew Manager</div>
     <div class="actions">
-      <button id="btn-update" class="btn primary" title="Update Homebrew repositories and metadata">Update Homebrew</button>
-      <button id="btn-upgrade-selected" class="btn">Upgrade Selected</button>
-      <button id="btn-refresh" class="btn">Refresh</button>
+      <button id="btn-update" class="btn primary" title="Update Homebrew repositories and metadata" style="display: none;">Update Homebrew</button>
+      <button id="btn-settings" class="btn" title="Settings">⚙️</button>
     </div>
   </header>
 
@@ -25,16 +27,24 @@
     </nav>
 
     <section id="tab-packages" class="tab-panel active">
-      <div class="section-header">
+      <div id="outdated-header" class="section-header">
         <h2>Outdated Packages</h2>
         <div class="section-tools">
           <label class="select-all"><input id="chk-select-all" type="checkbox" /> Select all</label>
+          <button id="btn-upgrade-selected" class="btn">Upgrade Selected</button>
         </div>
       </div>
-      <div class="hint">Select items to upgrade in bulk, or upgrade/uninstall individually.</div>
+      <div id="outdated-hint" class="hint">Select items to upgrade in bulk, or upgrade/uninstall individually.</div>
       <div id="outdated-list" class="grid"></div>
       <div class="section-header" style="margin-top:18px;">
         <h2>All Installed Packages</h2>
+        <div class="section-tools">
+          <div class="search-input-container">
+            <span class="search-icon">🔍</span>
+            <input id="installed-search" type="text" placeholder="Filter installed packages..." />
+            <button id="installed-search-clear" class="search-clear" title="Clear filter" style="display: none;">✕</button>
+          </div>
+        </div>
       </div>
       <div id="installed-list" class="grid"></div>
     </section>
@@ -57,9 +67,11 @@
     <section id="tab-search" class="tab-panel">
       <div class="section-header">
         <h2>Search</h2>
-        <div class="search-bar">
+        <div class="search-input-container main-search">
+          <span class="search-icon">🔍</span>
           <input id="search-input" type="text" placeholder="Search formulae and casks..." />
-          <button id="btn-search" class="btn">Search</button>
+          <button id="search-input-clear" class="search-clear" title="Clear search" style="display: none;">✕</button>
+          <button id="btn-search" class="search-submit">Search</button>
         </div>
       </div>
       <div id="search-results" class="grid"></div>
@@ -75,6 +87,27 @@
   </aside>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <div id="settings-modal" class="sudo-dialog-overlay" style="display:none">
+    <div class="sudo-dialog">
+      <div class="sudo-header">
+        <h3>Settings</h3>
+        <button class="sudo-close" type="button">×</button>
+      </div>
+      <div class="sudo-content">
+        <p class="sudo-message">Store a sudo password to allow seamless upgrades requiring admin privileges.</p>
+        <div class="sudo-warning">Password is kept in-memory in your browser for this session only.</div>
+        <div class="sudo-input-group">
+          <label for="settings-sudo-password">Sudo password</label>
+          <input type="password" id="settings-sudo-password" class="sudo-password-input" placeholder="Password" autocomplete="current-password">
+        </div>
+        <div class="sudo-buttons">
+          <button type="button" class="btn" id="settings-cancel">Cancel</button>
+          <button type="button" class="btn primary" id="settings-save">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script src="/app.js"></script>
 </body>
