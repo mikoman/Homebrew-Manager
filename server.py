@@ -8,6 +8,9 @@ import subprocess
 import sys
 import threading
 from typing import Dict, List, Optional, Union
+import time
+import pty
+import select
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, urlparse
@@ -34,7 +37,10 @@ def find_brew_path() -> str:
 
 
 class BrewError(Exception):
-    pass
+    def __init__(self, message: str, needs_sudo: bool = False, permission_issue: bool = False):
+        super().__init__(message)
+        self.needs_sudo = needs_sudo
+        self.permission_issue = permission_issue
 
 
 class BrewManager:
@@ -43,7 +49,7 @@ class BrewManager:
         self.timeout_seconds = timeout_seconds
         self.lock = threading.Lock()
 
-    def run(self, args, capture_json: bool = False) -> Union[dict, str]:
+    def run(self, args, capture_json: bool = False, sudo_password: str = None) -> Union[dict, str]:
         cmd = [self.brew_path] + args
         env = os.environ.copy()
         env.setdefault("LC_ALL", "C.UTF-8")
@@ -51,21 +57,90 @@ class BrewManager:
         try:
             # Some brew commands mutate shared state; serialize to avoid overlapping runs
             with self.lock:
-                result = subprocess.run(
-                    cmd,
-                    env=env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=self.timeout_seconds,
-                    text=True,
-                )
+                if sudo_password:
+                    # If we have a sudo password, set up the environment to use it
+                    env['SUDO_ASKPASS'] = '/bin/echo'
+                    # Use expect-like approach or write password to stdin
+                    proc = subprocess.Popen(
+                        cmd,
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        stdin=subprocess.PIPE,
+                        text=True,
+                    )
+                    stdout, stderr = proc.communicate(input=f"{sudo_password}\n", timeout=self.timeout_seconds)
+                    result = type('Result', (), {
+                        'returncode': proc.returncode,
+                        'stdout': stdout,
+                        'stderr': stderr
+                    })()
+                    # Clear password from memory
+                    sudo_password = None
+                    del sudo_password
+                else:
+                    result = subprocess.run(
+                        cmd,
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=self.timeout_seconds,
+                        text=True,
+                    )
         except FileNotFoundError as e:
             raise BrewError("Homebrew not found. Please install Homebrew from https://brew.sh") from e
         except subprocess.TimeoutExpired as e:
             raise BrewError(f"Command timed out: {' '.join(cmd)}") from e
 
         if result.returncode != 0:
-            raise BrewError(result.stderr.strip() or f"Command failed: {' '.join(cmd)}")
+            error_output = result.stderr.strip()
+            stdout_output = result.stdout.strip()
+            combined_output = f"{error_output}\n{stdout_output}".strip()
+            
+            # Detect permission-related issues
+            needs_sudo = False
+            permission_issue = False
+            
+            permission_indicators = [
+                "Permission denied",
+                "Operation not permitted", 
+                "You don't have write permissions",
+                "requires administrator access",
+                "sudo",
+                "privilege"
+            ]
+            
+            sudo_indicators = [
+                "installer: Package name is",  # System installer requiring sudo
+                "requires administrator access", 
+                "must be run as root",
+                "sudo required",
+                "sudo: a terminal is required to read the password",
+                "sudo: a password is required", 
+                "either use the -S option to read from standard input",
+                "configure an askpass helper"
+            ]
+            
+            for indicator in permission_indicators:
+                if indicator.lower() in combined_output.lower():
+                    permission_issue = True
+                    break
+                    
+            for indicator in sudo_indicators:
+                if indicator.lower() in combined_output.lower():
+                    needs_sudo = True
+                    break
+            
+            # Create enhanced error message
+            if needs_sudo or permission_issue:
+                if needs_sudo:
+                    enhanced_message = f"Administrative privileges required: {combined_output}"
+                else:
+                    enhanced_message = f"Permission issue detected: {combined_output}"
+            else:
+                enhanced_message = combined_output or f"Command failed: {' '.join(cmd)}"
+            
+            raise BrewError(enhanced_message, needs_sudo=needs_sudo, permission_issue=permission_issue)
 
         output = result.stdout
         if capture_json:
@@ -75,7 +150,28 @@ class BrewManager:
                 raise BrewError("Failed to parse JSON output from brew")
         return output
 
-    def run_streaming(self, args):
+    def validate_sudo(self, password: str) -> None:
+        """Validate sudo timestamp using the provided password (non-interactive)."""
+        if not password:
+            raise BrewError("Sudo password required", needs_sudo=True)
+        try:
+            proc = subprocess.run(
+                ["/usr/bin/sudo", "-S", "-v"],
+                input=f"{password}\n",
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=20,
+            )
+        except Exception as e:
+            raise BrewError("Failed to validate sudo", needs_sudo=True) from e
+        finally:
+            # Best-effort clear
+            password = None
+        if proc.returncode != 0:
+            raise BrewError(proc.stderr.strip() or "Invalid sudo password", needs_sudo=True)
+
+    def run_streaming(self, args, sudo_password: str = None):
         """Run a brew command and yield output lines progressively.
 
         Combines stdout and stderr to preserve order. Yields text lines as they arrive.
@@ -87,35 +183,146 @@ class BrewManager:
         # Serialize brew invocations to avoid state corruption
         with self.lock:
             try:
+                # Always allocate a PTY so that any sudo prompts go to the PTY, not the server terminal
+                if sudo_password:
+                    self.validate_sudo(sudo_password)
+                master_fd, slave_fd = pty.openpty()
                 proc = subprocess.Popen(
                     cmd,
                     env=env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                    universal_newlines=True,
+                    stdin=slave_fd,
+                    stdout=slave_fd,
+                    stderr=slave_fd,
+                    bufsize=0,
+                    close_fds=True,
                 )
+                # We will read from master_fd below
             except FileNotFoundError as e:
                 raise BrewError("Homebrew not found. Please install Homebrew from https://brew.sh") from e
-            # Stream lines
+            # Stream lines and collect output for error analysis
+            collected_output = []
             try:
-                if proc.stdout is not None:
-                    for line in proc.stdout:
-                        yield line.rstrip("\n")
+                # Read bytes from PTY master and decode incrementally
+                buffer = ""
+                while True:
+                    r, _, _ = select.select([master_fd], [], [], 0.1)
+                    if master_fd in r:
+                        try:
+                            chunk = os.read(master_fd, 4096)
+                        except OSError:
+                            chunk = b""
+                        if not chunk:
+                            if proc.poll() is not None:
+                                break
+                            continue
+                        buffer += chunk.decode("utf-8", errors="replace")
+                        while "\n" in buffer:
+                            line, buffer = buffer.split("\n", 1)
+                            line_clean = line.rstrip("\r")
+                            collected_output.append(line_clean)
+                            yield line_clean
+                    if proc.poll() is not None:
+                        # drain remaining buffer
+                        if buffer:
+                            for rem_line in buffer.splitlines():
+                                line_clean = rem_line.rstrip("\r")
+                                collected_output.append(line_clean)
+                                yield line_clean
+                        break
             finally:
                 # Ensure process completes
                 proc.wait()
+                try:
+                    os.close(master_fd)
+                    os.close(slave_fd)
+                except Exception:
+                    pass
             if proc.returncode != 0:
-                raise BrewError(f"Command failed ({proc.returncode}): {' '.join(cmd)}")
+                # Analyze collected output for sudo/permission issues (same logic as run method)
+                combined_output = "\n".join(collected_output)
+                needs_sudo = False
+                permission_issue = False
+                
+                permission_indicators = [
+                    "Permission denied",
+                    "Operation not permitted", 
+                    "You don't have write permissions",
+                    "requires administrator access",
+                    "sudo",
+                    "privilege"
+                ]
+                
+                sudo_indicators = [
+                    "installer: Package name is",  # System installer requiring sudo
+                    "requires administrator access", 
+                    "must be run as root",
+                    "sudo required",
+                    "sudo: a terminal is required to read the password",
+                    "sudo: a password is required", 
+                    "either use the -S option to read from standard input",
+                    "configure an askpass helper"
+                ]
+                
+                for indicator in permission_indicators:
+                    if indicator.lower() in combined_output.lower():
+                        permission_issue = True
+                        break
+                        
+                for indicator in sudo_indicators:
+                    if indicator.lower() in combined_output.lower():
+                        needs_sudo = True
+                        break
+                
+                # Create enhanced error message
+                if needs_sudo or permission_issue:
+                    if needs_sudo:
+                        enhanced_message = f"Administrative privileges required: Command failed ({proc.returncode}): {' '.join(cmd)}"
+                    else:
+                        enhanced_message = f"Permission issue detected: Command failed ({proc.returncode}): {' '.join(cmd)}"
+                else:
+                    enhanced_message = f"Command failed ({proc.returncode}): {' '.join(cmd)}"
+                
+                raise BrewError(enhanced_message, needs_sudo=needs_sudo, permission_issue=permission_issue)
 
     # Data fetchers
     def outdated(self) -> dict:
         data = self.run(["outdated", "--greedy", "--json=v2"], capture_json=True)
-        # Ensure keys exist
+        
+        # Enhance with descriptions by getting info for each outdated package
+        formulae = data.get("formulae", [])
+        casks = data.get("casks", [])
+        
+        # Get descriptions for outdated formulae
+        for formula in formulae:
+            try:
+                # Get info for each formula individually to be more reliable
+                formula_info = self.run(["info", "--json=v2", "--formula", formula["name"]], capture_json=True)
+                formulae_list = formula_info.get("formulae", [])
+                if formulae_list:
+                    formula["desc"] = formulae_list[0].get("desc", "")
+                else:
+                    formula["desc"] = ""
+            except Exception as e:
+                print(f"Failed to fetch description for formula {formula['name']}: {e}")
+                formula["desc"] = ""
+        
+        # Get descriptions for outdated casks
+        for cask in casks:
+            try:
+                # Get info for each cask individually to be more reliable
+                cask_info = self.run(["info", "--json=v2", "--cask", cask["name"]], capture_json=True)
+                casks_list = cask_info.get("casks", [])
+                if casks_list:
+                    cask["desc"] = casks_list[0].get("desc", "")
+                else:
+                    cask["desc"] = ""
+            except Exception as e:
+                print(f"Failed to fetch description for cask {cask['name']}: {e}")
+                cask["desc"] = ""
+        
         return {
-            "formulae": data.get("formulae", []),
-            "casks": data.get("casks", []),
+            "formulae": formulae,
+            "casks": casks,
         }
 
     def installed_info(self) -> dict:
@@ -188,12 +395,26 @@ class BrewManager:
         return {"formulae": orphaned_list, "casks": []}
 
     # Actions
+    def needs_update(self) -> bool:
+        # Check if homebrew needs updating by checking outdated status
+        try:
+            # Use 'brew outdated --greedy --verbose' to check if brew itself needs updating
+            output = self.run(["outdated", "--greedy", "--verbose"])
+            # If there's any output, homebrew or its dependencies need updating
+            return bool(output.strip())
+        except:
+            # If command fails, assume no update needed
+            return False
+
     def update(self) -> str:
         # Update brew metadata
         return self.run(["update"])  # textual output
 
-    def upgrade(self, formulae: Optional[List[str]] = None, casks: Optional[List[str]] = None) -> dict:
-        logs: dict[str, str] = {}
+    def upgrade(self, formulae: Optional[List[str]] = None, casks: Optional[List[str]] = None, sudo_password: Optional[str] = None) -> dict:
+        logs: Dict[str, str] = {}
+        if sudo_password:
+            # Validate once so casks can leverage cached sudo in the session
+            self.validate_sudo(sudo_password)
         if formulae:
             logs["formulae"] = self.run(["upgrade", "--formula", *formulae])
         if casks:
@@ -213,7 +434,42 @@ class BrewManager:
                 if name and not name.startswith("==>"):
                     items.append(name)
             return items
-        return {"formulae": parse_list(f_out), "casks": parse_list(c_out)}
+        
+        formulae = parse_list(f_out)
+        casks = parse_list(c_out)
+        
+        # Enhance with descriptions (limit to first 20 results for performance)
+        enhanced_formulae = []
+        for name in formulae[:20]:
+            try:
+                info = self.run(["info", "--json=v2", "--formula", name], capture_json=True)
+                formula_info = info.get("formulae", [])
+                if formula_info:
+                    enhanced_formulae.append({
+                        "name": name,
+                        "desc": formula_info[0].get("desc", "")
+                    })
+                else:
+                    enhanced_formulae.append({"name": name, "desc": ""})
+            except:
+                enhanced_formulae.append({"name": name, "desc": ""})
+        
+        enhanced_casks = []
+        for name in casks[:20]:
+            try:
+                info = self.run(["info", "--json=v2", "--cask", name], capture_json=True)
+                cask_info = info.get("casks", [])
+                if cask_info:
+                    enhanced_casks.append({
+                        "name": name,
+                        "desc": cask_info[0].get("desc", "")
+                    })
+                else:
+                    enhanced_casks.append({"name": name, "desc": ""})
+            except:
+                enhanced_casks.append({"name": name, "desc": ""})
+        
+        return {"formulae": enhanced_formulae, "casks": enhanced_casks}
 
     def install(self, name: str, kind: str) -> str:
         if kind == "cask":
@@ -317,7 +573,12 @@ class Handler(SimpleHTTPRequestHandler):
                         send_event("log", line)
                     send_event("end", "ok")
                 except BrewError as e:
-                    send_event("error", str(e))
+                    error_msg = str(e)
+                    if getattr(e, 'needs_sudo', False):
+                        error_msg += " | REQUIRES_SUDO"
+                    elif getattr(e, 'permission_issue', False):
+                        error_msg += " | PERMISSION_ISSUE"
+                    send_event("error", error_msg)
                 except Exception as e:
                     send_event("error", f"Unexpected error: {e}")
                 return
@@ -350,7 +611,12 @@ class Handler(SimpleHTTPRequestHandler):
                         send_event("log", line)
                     send_event("end", "ok")
                 except BrewError as e:
-                    send_event("error", str(e))
+                    error_msg = str(e)
+                    if getattr(e, 'needs_sudo', False):
+                        error_msg += " | REQUIRES_SUDO"
+                    elif getattr(e, 'permission_issue', False):
+                        error_msg += " | PERMISSION_ISSUE"
+                    send_event("error", error_msg)
                 except Exception as e:
                     send_event("error", f"Unexpected error: {e}")
                 return
@@ -383,14 +649,40 @@ class Handler(SimpleHTTPRequestHandler):
                         send_event("log", line)
                     send_event("end", "ok")
                 except BrewError as e:
-                    send_event("error", str(e))
+                    error_msg = str(e)
+                    if getattr(e, 'needs_sudo', False):
+                        error_msg += " | REQUIRES_SUDO"
+                    elif getattr(e, 'permission_issue', False):
+                        error_msg += " | PERMISSION_ISSUE"
+                    send_event("error", error_msg)
                 except Exception as e:
                     send_event("error", f"Unexpected error: {e}")
                 return
             if path == "/api/upgrade_stream":
-                # SSE stream for `brew upgrade`
-                formulae = qs.get("formulae", [])
-                casks = qs.get("casks", [])
+                # SSE stream for `brew upgrade` - can handle both GET and POST
+                if self.command == "GET":
+                    formulae = qs.get("formulae", [])
+                    casks = qs.get("casks", [])
+                    sudo_password = None
+                else:
+                    # POST with JSON body containing password
+                    body = self._parse_body()
+                    formulae = body.get("formulae", [])
+                    casks = body.get("casks", [])
+                    sudo_password = body.get("sudo_password")
+                    if sudo_password:
+                        try:
+                            brew.validate_sudo(sudo_password)
+                        except BrewError as e:
+                            self.send_response(200)
+                            self.send_header("Content-Type", "text/event-stream")
+                            self.send_header("Cache-Control", "no-cache")
+                            self.send_header("Connection", "keep-alive")
+                            self.end_headers()
+                            payload = f"event: error\n" + "\n".join(f"data: {line}" for line in str(e).splitlines() or [""]) + "\n\n"
+                            self.wfile.write(payload.encode("utf-8"))
+                            self.wfile.flush()
+                            return
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
@@ -410,28 +702,34 @@ class Handler(SimpleHTTPRequestHandler):
                         send_event("start", "Upgrading selected (" + "; ".join(summary) + ")...")
                         if formulae:
                             send_event("start", "Upgrading formulae...")
-                            for line in brew.run_streaming(["upgrade", "--formula", *formulae]):
+                            for line in brew.run_streaming(["upgrade", "--formula", *formulae], sudo_password=sudo_password):
                                 send_event("log", line)
                             send_event("log", "Formulae upgraded")
                         if casks:
                             send_event("start", "Upgrading casks...")
-                            for line in brew.run_streaming(["upgrade", "--cask", *casks]):
+                            for line in brew.run_streaming(["upgrade", "--cask", *casks], sudo_password=sudo_password):
                                 send_event("log", line)
                             send_event("log", "Casks upgraded")
                     else:
                         send_event("start", "Upgrading all outdated packages...")
-                        for line in brew.run_streaming(["upgrade"]):
+                        for line in brew.run_streaming(["upgrade"], sudo_password=sudo_password):
                             send_event("log", line)
                     send_event("end", "ok")
                 except BrewError as e:
-                    send_event("error", str(e))
+                    error_msg = str(e)
+                    if getattr(e, 'needs_sudo', False):
+                        error_msg += " | REQUIRES_SUDO"
+                    elif getattr(e, 'permission_issue', False):
+                        error_msg += " | PERMISSION_ISSUE"
+                    send_event("error", error_msg)
                 except Exception as e:
                     send_event("error", f"Unexpected error: {e}")
                 return
             if path == "/api/health":
                 # Quick check for brew existence
                 version = brew.run(["--version"]).splitlines()[0]
-                self._send_json({"ok": True, "brew": version})
+                needs_update = brew.needs_update()
+                self._send_json({"ok": True, "brew": version, "needs_update": needs_update})
                 return
             if path == "/api/summary":
                 out = brew.outdated()
@@ -475,7 +773,13 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             self.send_error(404, "Unknown API endpoint")
         except BrewError as e:
-            self._send_json({"ok": False, "error": str(e)}, 500)
+            error_response = {
+                "ok": False, 
+                "error": str(e),
+                "needs_sudo": getattr(e, 'needs_sudo', False),
+                "permission_issue": getattr(e, 'permission_issue', False)
+            }
+            self._send_json(error_response, 500)
         except Exception as e:
             self._send_json({"ok": False, "error": f"Unexpected error: {e}"}, 500)
 
@@ -484,6 +788,18 @@ class Handler(SimpleHTTPRequestHandler):
         path = parsed.path
         body = self._parse_body()
         try:
+            if path == "/api/sudo/validate":
+                password = body.get("sudo_password")
+                if not password:
+                    self._send_json({"ok": False, "error": "sudo_password is required"}, 400)
+                    return
+                try:
+                    brew.validate_sudo(password)
+                except BrewError as e:
+                    self._send_json({"ok": False, "error": str(e)}, 401)
+                    return
+                self._send_json({"ok": True})
+                return
             if path == "/api/update":
                 text = brew.update()
                 self._send_json({"ok": True, "log": text})
@@ -491,9 +807,13 @@ class Handler(SimpleHTTPRequestHandler):
             if path == "/api/upgrade":
                 formulae = body.get("formulae") or []
                 casks = body.get("casks") or []
-                logs = brew.upgrade(formulae=formulae, casks=casks)
+                sudo_password = body.get("sudo_password")
+                logs = brew.upgrade(formulae=formulae, casks=casks, sudo_password=sudo_password)
                 self._send_json({"ok": True, "logs": logs})
                 return
+            if path == "/api/upgrade_stream":
+                # Handle POST to streaming endpoint (for password support)
+                return self._handle_api_get()
             if path == "/api/install":
                 name = body.get("name")
                 kind = body.get("type") or "formula"
@@ -514,7 +834,13 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             self.send_error(404, "Unknown API endpoint")
         except BrewError as e:
-            self._send_json({"ok": False, "error": str(e)}, 500)
+            error_response = {
+                "ok": False, 
+                "error": str(e),
+                "needs_sudo": getattr(e, 'needs_sudo', False),
+                "permission_issue": getattr(e, 'permission_issue', False)
+            }
+            self._send_json(error_response, 500)
         except Exception as e:
             self._send_json({"ok": False, "error": f"Unexpected error: {e}"}, 500)
 
