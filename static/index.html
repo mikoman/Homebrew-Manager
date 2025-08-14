@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Homebrew Manager</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">🍺 Homebrew Manager</div>
+    <div class="actions">
+      <button id="btn-update" class="btn primary" title="Update Homebrew repositories and metadata">Update Homebrew</button>
+      <button id="btn-upgrade-selected" class="btn">Upgrade Selected</button>
+      <button id="btn-refresh" class="btn">Refresh</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <nav class="tabs">
+      <button class="tab active" data-tab="packages">Packages</button>
+      <button class="tab" data-tab="orphaned">Orphaned</button>
+      <button class="tab" data-tab="deprecated">Deprecated</button>
+      <button class="tab" data-tab="search">Search</button>
+    </nav>
+
+    <section id="tab-packages" class="tab-panel active">
+      <div class="section-header">
+        <h2>Outdated Packages</h2>
+        <div class="section-tools">
+          <label class="select-all"><input id="chk-select-all" type="checkbox" /> Select all</label>
+        </div>
+      </div>
+      <div class="hint">Select items to upgrade in bulk, or upgrade/uninstall individually.</div>
+      <div id="outdated-list" class="grid"></div>
+      <div class="section-header" style="margin-top:18px;">
+        <h2>All Installed Packages</h2>
+      </div>
+      <div id="installed-list" class="grid"></div>
+    </section>
+
+    <section id="tab-orphaned" class="tab-panel">
+      <div class="section-header">
+        <h2>Orphaned Packages</h2>
+        <div class="hint">Installed as dependencies and no longer required.</div>
+      </div>
+      <div id="orphaned-list" class="grid"></div>
+    </section>
+
+    <section id="tab-deprecated" class="tab-panel">
+      <div class="section-header">
+        <h2>Deprecated/Disabled Packages</h2>
+      </div>
+      <div id="deprecated-list" class="grid"></div>
+    </section>
+
+    <section id="tab-search" class="tab-panel">
+      <div class="section-header">
+        <h2>Search</h2>
+        <div class="search-bar">
+          <input id="search-input" type="text" placeholder="Search formulae and casks..." />
+          <button id="btn-search" class="btn">Search</button>
+        </div>
+      </div>
+      <div id="search-results" class="grid"></div>
+    </section>
+  </main>
+
+  <aside id="activity" class="activity">
+    <div class="activity-header">
+      <div class="title">Activity</div>
+      <button id="btn-activity-clear" class="btn small ghost" title="Clear activity">Clear</button>
+    </div>
+    <div id="activity-log" class="activity-log" aria-live="polite" aria-atomic="false"></div>
+  </aside>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
