@@ -38,21 +38,21 @@ Before using Homebrew Manager, you need to have the following installed:
 
 #### For macOS Users
 
-1. **Install Python** (if not already installed):
+1. **Install Homebrew** (if not already installed):
+   ```bash
+   # Install Homebrew
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   
+   # Follow the post-installation instructions for your shell
+   ```
+
+2. **Install Python** (if not already installed):
    ```bash
    # Check if Python is installed
    python3 --version
    
    # If not installed, install via Homebrew
    brew install python
-   ```
-
-2. **Install Homebrew** (if not already installed):
-   ```bash
-   # Install Homebrew
-   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-   
-   # Follow the post-installation instructions for your shell
    ```
 
 3. **Clone and Run Homebrew Manager**:
