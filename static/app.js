@@ -2,6 +2,11 @@ const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 let OUTDATED_SET = new Set();
 
+// Debug helper: enable via localStorage.setItem('hbw_debug','1')
+function dbg(...args) {
+  try { if (localStorage.getItem('hbw_debug')) console.debug('[HBW]', ...args); } catch {}
+}
+
 // Helpers for robust name/description handling (casks sometimes use arrays)
 function getItemKeyName(it) {
   let n = it && it.name;
@@ -229,6 +234,8 @@ function renderOutdated(data) {
     `;
     root.appendChild(card);
   }
+  // Attach explicit handlers (in addition to delegation) after render
+  attachUninstallHandlers(root);
 }
 
 function renderOrphaned(data) {
@@ -256,6 +263,7 @@ function renderOrphaned(data) {
     `;
     root.appendChild(card);
   }
+  attachUninstallHandlers(root);
 }
 
 function renderDeprecated(data) {
@@ -318,6 +326,7 @@ function renderInstalled(data) {
     `;
     root.appendChild(card);
   }
+  attachUninstallHandlers(root);
 }
 
 function applyInstalledFilter() {
@@ -353,6 +362,7 @@ function applyInstalledFilter() {
     `;
     root.appendChild(card);
   }
+  attachUninstallHandlers(root);
 }
 
 async function refreshSummary() {
@@ -744,11 +754,11 @@ function initEvents() {
   });
   // Actions within packages tab
   document.addEventListener('click', (e) => {
+    // Single item upgrade
     const upOne = e.target.closest('[data-upgrade-one-name]');
     if (upOne) {
       const name = upOne.dataset.upgradeOneName;
       const kind = upOne.dataset.upgradeOneKind;
-      // Reuse bulk flow with single selection
       const isCask = kind === 'cask';
       const formulae = isCask ? [] : [name];
       const casks = isCask ? [name] : [];
@@ -772,13 +782,11 @@ function initEvents() {
               resolve(); 
             },
             onError: async (m) => {
-              // Check if error requires sudo password
               if (shouldPromptSudo(m)) {
                 try {
                   const password = await showPasswordDialog('upgrade', name);
                   activityClear();
                   activityAppend('start', 'Retrying upgrade with authentication...');
-                  // Retry with password using POST to streaming endpoint
                   const response = await fetch('/api/upgrade_stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -788,53 +796,29 @@ function initEvents() {
                   const decoder = new TextDecoder();
                   let buffer = '';
                   let currentEvent = '';
-                  
                   while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
-                    
                     buffer += decoder.decode(value, { stream: true });
                     const lines = buffer.split('\n');
                     buffer = lines.pop() || '';
-                    
                     for (const line of lines) {
-                      if (line.startsWith('event: ')) {
-                        currentEvent = line.slice(7);
-                        continue;
-                      }
+                      if (line.startsWith('event: ')) { currentEvent = line.slice(7); continue; }
                       if (line.startsWith('data: ')) {
                         const data = line.slice(6);
                         if (currentEvent === 'start') activityAppend('start', data);
                         else if (currentEvent === 'log') activityAppend('log', data);
-                        else if (currentEvent === 'end') {
-                          requestAnimationFrame(() => {
-                            activityClear();
-                            activityAppend('end', 'Upgrade complete');
-                          });
-                          toast('Upgrade complete');
-                          await refreshPackagesOnly();
-                          resolve();
-                          return;
-                        }
-                        else if (currentEvent === 'error') {
-                          activityAppend('error', data);
-                          toast('Upgrade failed');
-                          resolve();
-                          return;
-                        }
+                        else if (currentEvent === 'end') { requestAnimationFrame(() => { activityClear(); activityAppend('end', 'Upgrade complete'); }); toast('Upgrade complete'); await refreshPackagesOnly(); resolve(); return; }
+                        else if (currentEvent === 'error') { activityAppend('error', data); toast('Upgrade failed'); resolve(); return; }
                       }
                     }
                   }
                 } catch (passwordErr) {
-                  if (passwordErr.message !== 'User cancelled') {
-                    activityAppend('error', 'Authentication failed');
-                    toast('Authentication failed');
-                  }
+                  if (passwordErr.message !== 'User cancelled') { activityAppend('error', 'Authentication failed'); toast('Authentication failed'); }
                   resolve();
                   return;
                 }
               }
-              
               try {
                 const res = await api('/api/upgrade', { method: 'POST', body: JSON.stringify({ formulae, casks }) });
                 const logs = res?.logs || {};
@@ -846,10 +830,7 @@ function initEvents() {
                   const lines = String(block).split(/\r?\n/);
                   for (const line of lines) if (line.trim()) activityAppend('log', line);
                 }
-                requestAnimationFrame(() => {
-            activityClear();
-            activityAppend('end', 'Upgrade complete');
-          });
+                requestAnimationFrame(() => { activityClear(); activityAppend('end', 'Upgrade complete'); });
                 toast('Upgrade complete');
                 await refreshPackagesOnly();
               } catch (e) {
@@ -861,11 +842,14 @@ function initEvents() {
           });
         });
       })());
+      return; // Prevent also handling uninstall on same click
     }
-  });
-  $('#orphaned-list').addEventListener('click', (e) => {
-    const del = e.target.closest('[data-uninstall-name]');
-    if (del) withButtonLoading(del, () => handleUninstall(del.dataset.uninstallName, del.dataset.uninstallKind || 'formula'));
+    // Uninstall buttons (outdated, installed, orphaned sections)
+    const uninstallBtn = e.target.closest('[data-uninstall-name]');
+    if (uninstallBtn) {
+      withButtonLoading(uninstallBtn, () => handleUninstall(uninstallBtn.dataset.uninstallName, uninstallBtn.dataset.uninstallKind || 'formula'));
+      return;
+    }
   });
   $('#btn-activity-clear').addEventListener('click', activityClear);
   // Note: Installed filter input handling is now managed above with clear button
@@ -942,6 +926,22 @@ async function handleUninstall(name, kind = 'formula') {
     });
   });
 }
+
+// Explicit per-button binding as fallback if event delegation fails (e.g. shadow DOM edge cases)
+function attachUninstallHandlers(scope) {
+  if (!scope) return;
+  scope.querySelectorAll('[data-uninstall-name]').forEach(btn => {
+    if (btn.__hbwBound) return;
+    btn.__hbwBound = true;
+    btn.addEventListener('click', (ev) => {
+      dbg('direct uninstall handler', btn.dataset.uninstallName, btn.dataset.uninstallKind);
+      ev.preventDefault();
+      ev.stopPropagation();
+      withButtonLoading(btn, () => handleUninstall(btn.dataset.uninstallName, btn.dataset.uninstallKind || 'formula'));
+    });
+  });
+}
+
 
 async function boot() {
   initEvents();
