@@ -347,7 +347,8 @@ class BrewManager:
                 if is_deprecated:
                     deprecated_items.append({
                         "name": item.get("name"),
-                        "full_name": item.get("full_name", item.get("name")),
+                        "full_name": item.get("full_name") or item.get("token"),
+                        "token": item.get("token"),
                         "versions": item.get("versions"),
                         "desc": item.get("desc"),
                         "homepage": item.get("homepage"),

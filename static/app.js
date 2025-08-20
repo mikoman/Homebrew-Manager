@@ -9,6 +9,15 @@ function dbg(...args) {
 
 // Helpers for robust name/description handling (casks sometimes use arrays)
 function getItemKeyName(it) {
+  let n = it && (it.full_name || it.token);
+  if (!n) {
+    n = it && it.name;
+    if (Array.isArray(n)) n = n[0] || '';
+  }
+  return String(n || '');
+}
+
+function getItemDisplayName(it) {
   let n = it && it.name;
   if (Array.isArray(n)) n = n[0] || '';
   if (!n) n = (it && (it.full_name || it.token)) || '';
@@ -211,16 +220,17 @@ function renderOutdated(data) {
   if (hint) hint.style.display = '';
   root.style.display = '';
   for (const item of all) {
-    const name = item.name || item.full_name;
+    const key = getItemKeyName(item);
+    const display = getItemDisplayName(item);
     const current = item.current_version || item.current_cask_version || item.current_formula_version;
     const installed = (item.installed_versions && item.installed_versions.join(', ')) || (item.installed_versions || []).join(', ');
 
     const card = document.createElement('div');
     card.className = 'card';
     const description = item.desc && item.desc.trim() ? item.desc : '';
-    
+
     card.innerHTML = `
-      <div class="title"><label><input type="checkbox" data-kind="${item.__type}" data-name="${name}" /> ${name}</label></div>
+      <div class="title"><label><input type="checkbox" data-kind="${item.__type}" data-name="${key}" /> ${display}</label></div>
       ${description ? `<div class="description">${description}</div>` : ''}
       <div class="subtitle">${item.__type} • Current: ${current || 'n/a'} • Installed: ${installed || 'n/a'}</div>
       <div class="badges">
@@ -228,8 +238,8 @@ function renderOutdated(data) {
         ${item.auto_updates ? '<span class="badge">Auto-updates</span>' : ''}
       </div>
       <div class="controls">
-        <button class="btn small" data-upgrade-one-name="${name}" data-upgrade-one-kind="${item.__type}">Upgrade</button>
-        <button class="btn small" data-uninstall-name="${name}" data-uninstall-kind="${item.__type}">Uninstall</button>
+        <button class="btn small" data-upgrade-one-name="${key}" data-upgrade-one-kind="${item.__type}">Upgrade</button>
+        <button class="btn small" data-uninstall-name="${key}" data-uninstall-kind="${item.__type}" data-display-name="${display}">Uninstall</button>
       </div>
     `;
     root.appendChild(card);
@@ -247,10 +257,12 @@ function renderOrphaned(data) {
     return;
   }
   for (const item of formulae) {
+    const key = getItemKeyName(item);
+    const display = getItemDisplayName(item);
     const card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = `
-      <div class="title">${item.name}</div>
+      <div class="title">${display}</div>
       ${item.desc ? `<div class="description">${item.desc}</div>` : ''}
       <div class="subtitle">formula</div>
       <div class="badges">
@@ -258,7 +270,7 @@ function renderOrphaned(data) {
         <span class="badge">Dependency-only</span>
       </div>
       <div class=\"controls\">
-        <button class=\"btn small\" data-uninstall-name=\"${item.name}\" data-uninstall-kind=\"formula\">Uninstall</button>
+        <button class=\"btn small\" data-uninstall-name=\"${key}\" data-uninstall-kind=\"formula\" data-display-name=\"${display}\">Uninstall</button>
       </div>
     `;
     root.appendChild(card);
@@ -273,24 +285,35 @@ function renderDeprecated(data) {
     ...(data.formulae || []).map(x => ({ ...x, __type: 'formula' })),
     ...(data.casks || []).map(x => ({ ...x, __type: 'cask' })),
   ];
+  const clearBtn = $('#btn-remove-deprecated');
   if (!all.length) {
     root.innerHTML = `<div class="empty">No deprecated or disabled packages</div>`;
+    if (clearBtn) clearBtn.style.display = 'none';
     return;
   }
+  if (clearBtn) clearBtn.style.display = '';
   for (const item of all) {
+    const key = getItemKeyName(item);
+    const display = getItemDisplayName(item);
+    const controls = [];
+    if (item.homepage) {
+      controls.push(`<a class="btn small" href="${item.homepage}" target="_blank" rel="noopener noreferrer">Homepage</a>`);
+    }
+    controls.push(`<button class="btn small" data-uninstall-name="${key}" data-uninstall-kind="${item.__type}" data-display-name="${display}">Remove</button>`);
     const card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = `
-      <div class="title">${item.name}</div>
+      <div class="title">${display}</div>
       ${item.desc ? `<div class="description">${item.desc}</div>` : ''}
       <div class="subtitle">${item.__type}${item.deprecated ? ' • deprecated' : ''}${item.disabled ? ' • disabled' : ''}</div>
       <div class="badges">
         ${item.deprecation_date ? `<span class="badge warn">Since ${item.deprecation_date}</span>` : ''}
       </div>
-      ${item.homepage ? `<div class="controls"><a class="btn small" href="${item.homepage}" target="_blank" rel="noopener noreferrer">Homepage</a></div>` : ''}
+      <div class="controls">${controls.join(' ')}</div>
     `;
     root.appendChild(card);
   }
+  attachUninstallHandlers(root);
 }
 
 function renderInstalled(data) {
@@ -309,19 +332,20 @@ function renderInstalled(data) {
     return;
   }
   for (const item of all) {
-    const name = getItemKeyName(item);
+    const key = getItemKeyName(item);
+    const display = getItemDisplayName(item);
     const version = (item.versions && item.versions.stable) || item.version || '';
     const descStr = getItemDesc(item);
     const description = descStr && descStr.trim() ? descStr : '';
     const card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = `
-      <div class="title">${name}</div>
+      <div class="title">${display}</div>
       ${description ? `<div class="description">${description}</div>` : ''}
       <div class="subtitle">${item.__type}${version ? ` • ${version}` : ''}</div>
       <div class="controls">
-        ${OUTDATED_SET.has(name) ? `<button class="btn small" data-upgrade-one-name="${name}" data-upgrade-one-kind="${item.__type}">Upgrade</button>` : ''}
-        <button class="btn small" data-uninstall-name="${name}" data-uninstall-kind="${item.__type}">Uninstall</button>
+        ${OUTDATED_SET.has(key) ? `<button class="btn small" data-upgrade-one-name="${key}" data-upgrade-one-kind="${item.__type}">Upgrade</button>` : ''}
+        <button class="btn small" data-uninstall-name="${key}" data-uninstall-kind="${item.__type}" data-display-name="${display}">Uninstall</button>
       </div>
     `;
     root.appendChild(card);
@@ -336,28 +360,30 @@ function applyInstalledFilter() {
   if (!root) return;
   root.innerHTML = '';
   const filtered = q ? items.filter(it => {
-    const name = getItemKeyName(it).toLowerCase();
+    const key = getItemKeyName(it).toLowerCase();
+    const disp = getItemDisplayName(it).toLowerCase();
     const desc = getItemDesc(it).toLowerCase();
-    return name.includes(q) || desc.includes(q);
+    return key.includes(q) || disp.includes(q) || desc.includes(q);
   }) : items;
   if (!filtered.length) {
     root.innerHTML = `<div class="empty">No matches</div>`;
     return;
   }
   for (const item of filtered) {
-    const name = getItemKeyName(item);
+    const key = getItemKeyName(item);
+    const display = getItemDisplayName(item);
     const version = (item.versions && item.versions.stable) || item.version || '';
     const descStr = getItemDesc(item);
     const description = descStr && descStr.trim() ? descStr : '';
     const card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = `
-      <div class="title">${name}</div>
+      <div class="title">${display}</div>
       ${description ? `<div class="description">${description}</div>` : ''}
       <div class="subtitle">${item.__type}${version ? ` • ${version}` : ''}</div>
       <div class="controls">
-        ${OUTDATED_SET.has(name) ? `<button class="btn small" data-upgrade-one-name="${name}" data-upgrade-one-kind="${item.__type}">Upgrade</button>` : ''}
-        <button class="btn small" data-uninstall-name="${name}" data-uninstall-kind="${item.__type}">Uninstall</button>
+        ${OUTDATED_SET.has(key) ? `<button class="btn small" data-upgrade-one-name="${key}" data-upgrade-one-kind="${item.__type}">Upgrade</button>` : ''}
+        <button class="btn small" data-uninstall-name="${key}" data-uninstall-kind="${item.__type}" data-display-name="${display}">Uninstall</button>
       </div>
     `;
     root.appendChild(card);
@@ -680,6 +706,16 @@ async function doSearch() {
   }
 }
 
+async function removeAllDeprecated() {
+  const buttons = $$('#deprecated-list [data-uninstall-name]');
+  if (!buttons.length) return;
+  if (!confirm(`Uninstall all ${buttons.length} deprecated packages?`)) return;
+  const targets = buttons.map(btn => ({ name: btn.dataset.uninstallName, kind: btn.dataset.uninstallKind || 'formula', display: btn.dataset.displayName }));
+  for (const t of targets) {
+    await handleUninstall(t.name, t.kind, false, t.display);
+  }
+}
+
 async function handleInstall(name, kind) {
   activityClear();
   const params = new URLSearchParams({ name, type: kind });
@@ -737,6 +773,7 @@ function initEvents() {
   $$('.tab').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
   $('#btn-update').addEventListener('click', (e) => withButtonLoading(e.currentTarget, doUpdate));
   $('#btn-upgrade-selected').addEventListener('click', (e) => withButtonLoading(e.currentTarget, doUpgradeSelected));
+  $('#btn-remove-deprecated')?.addEventListener('click', (e) => withButtonLoading(e.currentTarget, removeAllDeprecated));
   $('#btn-search').addEventListener('click', (e) => withButtonLoading(e.currentTarget, doSearch));
   $('#search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
   
@@ -880,7 +917,7 @@ function initEvents() {
     // Uninstall buttons (outdated, installed, orphaned sections)
     const uninstallBtn = e.target.closest('[data-uninstall-name]');
     if (uninstallBtn) {
-      withButtonLoading(uninstallBtn, () => handleUninstall(uninstallBtn.dataset.uninstallName, uninstallBtn.dataset.uninstallKind || 'formula'));
+      withButtonLoading(uninstallBtn, () => handleUninstall(uninstallBtn.dataset.uninstallName, uninstallBtn.dataset.uninstallKind || 'formula', true, uninstallBtn.dataset.displayName));
       return;
     }
   });
@@ -919,11 +956,12 @@ function initEvents() {
   }
 }
 
-async function handleUninstall(name, kind = 'formula') {
-  if (!confirm(`Uninstall ${name}?`)) return;
+async function handleUninstall(name, kind = 'formula', confirmPrompt = true, displayName) {
+  const shown = displayName || name;
+  if (confirmPrompt && !confirm(`Uninstall ${shown}?`)) return;
   activityClear();
   const params = new URLSearchParams({ name, type: kind });
-  activityAppend('start', `Uninstalling ${name}...`);
+  activityAppend('start', `Uninstalling ${shown}...`);
   return new Promise((resolve) => {
     streamSSE(`/api/uninstall_stream?${params.toString()}`, {
       onStart: (m) => activityAppend('start', m),
@@ -970,7 +1008,7 @@ function attachUninstallHandlers(scope) {
       dbg('direct uninstall handler', btn.dataset.uninstallName, btn.dataset.uninstallKind);
       ev.preventDefault();
       ev.stopPropagation();
-      withButtonLoading(btn, () => handleUninstall(btn.dataset.uninstallName, btn.dataset.uninstallKind || 'formula'));
+      withButtonLoading(btn, () => handleUninstall(btn.dataset.uninstallName, btn.dataset.uninstallKind || 'formula', true, btn.dataset.displayName));
     });
   });
 }
