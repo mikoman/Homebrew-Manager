@@ -273,11 +273,19 @@ function renderDeprecated(data) {
     ...(data.formulae || []).map(x => ({ ...x, __type: 'formula' })),
     ...(data.casks || []).map(x => ({ ...x, __type: 'cask' })),
   ];
+  const clearBtn = $('#btn-remove-deprecated');
   if (!all.length) {
     root.innerHTML = `<div class="empty">No deprecated or disabled packages</div>`;
+    if (clearBtn) clearBtn.style.display = 'none';
     return;
   }
+  if (clearBtn) clearBtn.style.display = '';
   for (const item of all) {
+    const controls = [];
+    if (item.homepage) {
+      controls.push(`<a class="btn small" href="${item.homepage}" target="_blank" rel="noopener noreferrer">Homepage</a>`);
+    }
+    controls.push(`<button class="btn small" data-uninstall-name="${item.name}" data-uninstall-kind="${item.__type}">Remove</button>`);
     const card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = `
@@ -287,10 +295,11 @@ function renderDeprecated(data) {
       <div class="badges">
         ${item.deprecation_date ? `<span class="badge warn">Since ${item.deprecation_date}</span>` : ''}
       </div>
-      ${item.homepage ? `<div class="controls"><a class="btn small" href="${item.homepage}" target="_blank" rel="noopener noreferrer">Homepage</a></div>` : ''}
+      <div class="controls">${controls.join(' ')}</div>
     `;
     root.appendChild(card);
   }
+  attachUninstallHandlers(root);
 }
 
 function renderInstalled(data) {
@@ -680,6 +689,16 @@ async function doSearch() {
   }
 }
 
+async function removeAllDeprecated() {
+  const buttons = $$('#deprecated-list [data-uninstall-name]');
+  if (!buttons.length) return;
+  if (!confirm(`Uninstall all ${buttons.length} deprecated packages?`)) return;
+  const targets = buttons.map(btn => ({ name: btn.dataset.uninstallName, kind: btn.dataset.uninstallKind || 'formula' }));
+  for (const t of targets) {
+    await handleUninstall(t.name, t.kind, false);
+  }
+}
+
 async function handleInstall(name, kind) {
   activityClear();
   const params = new URLSearchParams({ name, type: kind });
@@ -737,6 +756,7 @@ function initEvents() {
   $$('.tab').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
   $('#btn-update').addEventListener('click', (e) => withButtonLoading(e.currentTarget, doUpdate));
   $('#btn-upgrade-selected').addEventListener('click', (e) => withButtonLoading(e.currentTarget, doUpgradeSelected));
+  $('#btn-remove-deprecated')?.addEventListener('click', (e) => withButtonLoading(e.currentTarget, removeAllDeprecated));
   $('#btn-search').addEventListener('click', (e) => withButtonLoading(e.currentTarget, doSearch));
   $('#search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
   
@@ -919,8 +939,8 @@ function initEvents() {
   }
 }
 
-async function handleUninstall(name, kind = 'formula') {
-  if (!confirm(`Uninstall ${name}?`)) return;
+async function handleUninstall(name, kind = 'formula', confirmPrompt = true) {
+  if (confirmPrompt && !confirm(`Uninstall ${name}?`)) return;
   activityClear();
   const params = new URLSearchParams({ name, type: kind });
   activityAppend('start', `Uninstalling ${name}...`);
