@@ -987,3 +987,39 @@ input[type="checkbox"]:hover {
   min-width: 80px;
 }
 
+/* Dependency tree styles */
+.tree ul {
+  list-style: none;
+  margin: 0 0 0 16px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+}
+.tree .dep-name {
+  cursor: pointer;
+  user-select: none;
+  display: inline-block;
+  padding-left: 4px;
+}
+.tree .dep-name.has-children::before {
+  content: '▸';
+  display: inline-block;
+  width: 1em;
+  margin-left: -1em;
+  transition: transform 0.2s ease;
+}
+.tree .dep-name.has-children.open::before {
+  transform: rotate(90deg);
+}
+.tree ul.collapsed {
+  display: none;
+}
+.tree .dep-name.optional {
+  color: var(--text-secondary);
+}
+.tree .dep-name.missing {
+  color: #e53935;
+}
+.tree .dep-name.outdated {
+  color: #f59e0b;
+}
+

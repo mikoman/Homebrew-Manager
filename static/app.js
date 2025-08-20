@@ -327,6 +327,14 @@ function renderInstalled(data) {
   ];
   // Persist current set for client-side filtering
   window.__INSTALLED_CACHE__ = all;
+  const depList = $('#deps-packages');
+  if (depList) {
+    depList.innerHTML = '';
+    for (const item of all) {
+      const key = getItemKeyName(item);
+      depList.insertAdjacentHTML('beforeend', `<option value="${key}"></option>`);
+    }
+  }
   if (!all.length) {
     root.innerHTML = `<div class="empty">Nothing installed</div>`;
     return;
@@ -769,6 +777,90 @@ async function handleInfo(name, kind) {
   } catch (e) { toast(e.message); }
 }
 
+function renderDependencyTree(data) {
+  const root = $('#deps-tree');
+  if (!root) return;
+  root.innerHTML = '';
+  if (!data || !data.name) {
+    root.innerHTML = '<div class="empty">No dependencies found</div>';
+    return;
+  }
+
+  const installed = window.__INSTALLED_CACHE__ || [];
+
+  function makeNode(node) {
+    const li = document.createElement('li');
+    const span = document.createElement('span');
+    span.textContent = node.name;
+    span.className = 'dep-name';
+    if (node.optional) span.classList.add('optional');
+    const key = node.name;
+    if (!installed.find(it => getItemKeyName(it) === key)) span.classList.add('missing');
+    if (OUTDATED_SET.has(key)) span.classList.add('outdated');
+    li.appendChild(span);
+    if (node.deps && node.deps.length) {
+      const ul = document.createElement('ul');
+      for (const child of node.deps) ul.appendChild(makeNode(child));
+      li.appendChild(ul);
+      span.classList.add('has-children');
+      span.addEventListener('click', () => { ul.classList.toggle('collapsed'); span.classList.toggle('open'); });
+    }
+    return li;
+  }
+
+  const ul = document.createElement('ul');
+  ul.appendChild(makeNode(data));
+  root.appendChild(ul);
+  filterDependencyTree();
+}
+
+async function loadDependencyTree() {
+  const input = $('#deps-input');
+  const name = (input?.value || '').trim();
+  if (!name) { input?.focus(); return; }
+  const items = window.__INSTALLED_CACHE__ || [];
+  let kind = 'formula';
+  const match = items.find(it => getItemKeyName(it) === name);
+  if (match) kind = match.__type;
+  activityClear();
+  activityAppend('start', `Loading dependencies for ${name}...`);
+  try {
+    const tree = await api(`/api/dependencies?name=${encodeURIComponent(name)}&type=${encodeURIComponent(kind)}`);
+    const filterInput = $('#deps-filter');
+    if (filterInput) filterInput.value = '';
+    renderDependencyTree(tree);
+    activityAppend('end', 'Dependencies loaded');
+  } catch (e) {
+    activityAppend('error', e.message || 'Failed to load dependencies');
+    toast(e.message || 'Failed to load dependencies');
+  }
+}
+
+function filterDependencyTree() {
+  const q = ($('#deps-filter')?.value || '').trim().toLowerCase();
+  const clearBtn = $('#deps-filter-clear');
+  if (clearBtn) clearBtn.style.display = q ? 'block' : 'none';
+  const root = $('#deps-tree');
+  const top = root.querySelector('ul');
+  if (!top) return;
+
+  function walk(li) {
+    const span = li.querySelector(':scope > .dep-name');
+    const childUl = li.querySelector(':scope > ul');
+    let match = span && span.textContent.toLowerCase().includes(q);
+    if (childUl) {
+      let childMatch = false;
+      Array.from(childUl.children).forEach(c => { if (walk(c)) childMatch = true; });
+      if (q) childUl.style.display = childMatch ? '' : 'none';
+      match = match || childMatch;
+    }
+    li.style.display = !q || match ? '' : 'none';
+    return match;
+  }
+
+  Array.from(top.children).forEach(walk);
+}
+
 function initEvents() {
   $$('.tab').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
   $('#btn-update').addEventListener('click', (e) => withButtonLoading(e.currentTarget, doUpdate));
@@ -822,6 +914,16 @@ function initEvents() {
     if (install) withButtonLoading(install, () => handleInstall(install.dataset.installName, install.dataset.installKind));
     if (info) handleInfo(info.dataset.infoName, info.dataset.infoKind);
   });
+  const depsBtn = $('#deps-view');
+  const depsInput = $('#deps-input');
+  if (depsBtn && depsInput) {
+    depsBtn.addEventListener('click', (e) => withButtonLoading(depsBtn, loadDependencyTree));
+    depsInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') withButtonLoading(depsBtn, loadDependencyTree); });
+  }
+  const depsFilter = $('#deps-filter');
+  if (depsFilter) depsFilter.addEventListener('input', filterDependencyTree);
+  const depsFilterClear = $('#deps-filter-clear');
+  if (depsFilterClear) depsFilterClear.addEventListener('click', () => { $('#deps-filter').value = ''; filterDependencyTree(); $('#deps-filter').focus(); });
   // Actions within packages tab
   document.addEventListener('click', (e) => {
     // Single item upgrade

@@ -23,6 +23,7 @@
       <button class="tab active" data-tab="packages">Packages</button>
       <button class="tab" data-tab="orphaned">Orphaned</button>
       <button class="tab" data-tab="deprecated">Deprecated</button>
+      <button class="tab" data-tab="dependencies">Dependencies</button>
       <button class="tab" data-tab="search">Search</button>
     </nav>
 
@@ -65,6 +66,26 @@
         </div>
       </div>
       <div id="deprecated-list" class="grid"></div>
+    </section>
+
+    <section id="tab-dependencies" class="tab-panel">
+      <div class="section-header">
+        <h2>Package Dependencies</h2>
+        <div class="section-tools">
+          <div class="search-input-container">
+            <span class="search-icon">🔍</span>
+            <input id="deps-input" type="text" placeholder="Enter package name" list="deps-packages" />
+            <datalist id="deps-packages"></datalist>
+            <button id="deps-view" class="search-submit">View</button>
+          </div>
+        </div>
+      </div>
+      <div class="search-input-container" style="max-width:300px;margin:16px 0;">
+        <span class="search-icon">🔍</span>
+        <input id="deps-filter" type="text" placeholder="Filter dependencies" />
+        <button id="deps-filter-clear" class="search-clear" title="Clear filter" style="display:none;">✕</button>
+      </div>
+      <div id="deps-tree" class="tree"></div>
     </section>
 
     <section id="tab-search" class="tab-panel">
