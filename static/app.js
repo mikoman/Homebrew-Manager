@@ -365,57 +365,90 @@ function applyInstalledFilter() {
   attachUninstallHandlers(root);
 }
 
-async function refreshSummary() {
-  const panels = $$('.grid');
-  panels.forEach(p => p.classList.add('loading'));
-  activityClear();
-  activityAppend('start', 'Loading summary...');
+async function loadOutdated() {
+  const grid = $('#outdated-list');
+  grid.classList.add('loading');
+  activityAppend('log', 'Fetching outdated...');
   try {
-    // Fetch sequentially to provide immediate feedback
-    activityAppend('log', 'Fetching outdated...');
     const outdated = await api('/api/outdated');
     renderOutdated(outdated);
     activityAppend('log', 'Outdated loaded');
-
-    activityAppend('log', 'Fetching installed...');
-    const installed = await api('/api/installed');
-    renderInstalled(installed);
-    activityAppend('log', 'Installed loaded');
-
-    activityAppend('log', 'Fetching orphaned...');
-    const orphaned = await api('/api/orphaned');
-    renderOrphaned(orphaned);
-    activityAppend('log', 'Orphaned loaded');
-
-    activityAppend('log', 'Fetching deprecated...');
-    const deprecated = await api('/api/deprecated');
-    renderDeprecated(deprecated);
-    activityAppend('log', 'Deprecated loaded');
-    // Clear all previous messages and show only the completion status
-    requestAnimationFrame(() => {
-      activityClear();
-      activityAppend('end', 'Loading complete');
-    });
   } catch (e) {
-    activityAppend('error', e.message || 'Failed to load');
-    toast(e.message || 'Failed to load');
+    activityAppend('error', e.message || 'Failed to load outdated');
+    toast(e.message || 'Failed to load outdated');
   } finally {
-    panels.forEach(p => p.classList.remove('loading'));
+    grid.classList.remove('loading');
   }
 }
 
-async function refreshPackagesOnly() {
-  const grids = ['#outdated-list', '#installed-list'].map(sel => $(sel));
-  grids.forEach(g => g && g.classList.add('loading'));
+async function loadInstalled() {
+  const grid = $('#installed-list');
+  grid.classList.add('loading');
+  activityAppend('log', 'Fetching installed...');
   try {
-    const data = await api('/api/packages');
-    renderOutdated(data.outdated);
-    renderInstalled(data.installed);
+    const installed = await api('/api/installed');
+    renderInstalled(installed);
+    activityAppend('log', 'Installed loaded');
   } catch (e) {
-    toast(e.message || 'Failed to refresh packages');
+    activityAppend('error', e.message || 'Failed to load installed');
+    toast(e.message || 'Failed to load installed');
   } finally {
-    grids.forEach(g => g && g.classList.remove('loading'));
+    grid.classList.remove('loading');
   }
+}
+
+async function loadOrphaned() {
+  const grid = $('#orphaned-list');
+  grid.classList.add('loading');
+  activityAppend('log', 'Fetching orphaned...');
+  try {
+    const orphaned = await api('/api/orphaned');
+    renderOrphaned(orphaned);
+    activityAppend('log', 'Orphaned loaded');
+  } catch (e) {
+    activityAppend('error', e.message || 'Failed to load orphaned');
+    toast(e.message || 'Failed to load orphaned');
+  } finally {
+    grid.classList.remove('loading');
+  }
+}
+
+async function loadDeprecated() {
+  const grid = $('#deprecated-list');
+  grid.classList.add('loading');
+  activityAppend('log', 'Fetching deprecated...');
+  try {
+    const deprecated = await api('/api/deprecated');
+    renderDeprecated(deprecated);
+    activityAppend('log', 'Deprecated loaded');
+  } catch (e) {
+    activityAppend('error', e.message || 'Failed to load deprecated');
+    toast(e.message || 'Failed to load deprecated');
+  } finally {
+    grid.classList.remove('loading');
+  }
+}
+
+async function refreshSummary() {
+  activityClear();
+  activityAppend('start', 'Loading summary...');
+  await Promise.allSettled([
+    loadOutdated(),
+    loadInstalled(),
+    loadOrphaned(),
+    loadDeprecated(),
+  ]);
+  requestAnimationFrame(() => {
+    activityClear();
+    activityAppend('end', 'Loading complete');
+  });
+}
+
+async function refreshPackagesOnly() {
+  await Promise.allSettled([
+    loadOutdated(),
+    loadInstalled(),
+  ]);
 }
 
 async function doUpdate() {
