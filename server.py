@@ -19,6 +19,83 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(PROJECT_ROOT, "static")
 
 
+# Basic keyword-based categories for packages
+CATEGORY_KEYWORDS = {
+    "development": [
+        "compiler",
+        "build",
+        "code",
+        "programming",
+        "sdk",
+        "language",
+        "git",
+        "deploy",
+    ],
+    "utilities": [
+        "utility",
+        "tool",
+        "command-line",
+        "helper",
+        "file",
+        "archive",
+        "compression",
+        "encrypt",
+        "monitor",
+    ],
+    "networking": [
+        "network",
+        "ssh",
+        "http",
+        "dns",
+        "server",
+        "proxy",
+        "ftp",
+        "socket",
+        "vpn",
+        "web",
+    ],
+    "database": [
+        "database",
+        "sql",
+        "mysql",
+        "postgres",
+        "mongo",
+        "sqlite",
+        "redis",
+        "cassandra",
+    ],
+    "media": [
+        "audio",
+        "video",
+        "image",
+        "media",
+        "music",
+        "photo",
+        "graphics",
+        "ffmpeg",
+    ],
+    "system": [
+        "system",
+        "kernel",
+        "hardware",
+        "driver",
+        "daemon",
+        "process",
+    ],
+}
+DEFAULT_CATEGORY = "other"
+
+
+def categorize_item(item: Dict[str, Union[str, List[str]]]) -> str:
+    """Assign a simple category based on name/description keywords."""
+    text = f"{item.get('name', '')} {item.get('desc', '')}".lower()
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        for kw in keywords:
+            if kw in text:
+                return category
+    return DEFAULT_CATEGORY
+
+
 def find_brew_path() -> str:
     # Try PATH first
     path = shutil.which("brew")
@@ -328,9 +405,15 @@ class BrewManager:
     def installed_info(self) -> dict:
         formulae = self.run(["info", "--json=v2", "--installed", "--formula"], capture_json=True)
         casks = self.run(["info", "--json=v2", "--installed", "--cask"], capture_json=True)
+        formulae_list = formulae.get("formulae", [])
+        casks_list = casks.get("casks", [])
+        for item in formulae_list:
+            item["category"] = categorize_item(item)
+        for item in casks_list:
+            item["category"] = categorize_item(item)
         return {
-            "formulae": formulae.get("formulae", []),
-            "casks": casks.get("casks", []),
+            "formulae": formulae_list,
+            "casks": casks_list,
         }
 
     def leaves(self) -> List[str]:
