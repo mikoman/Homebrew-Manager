@@ -17,6 +17,8 @@ A modern, web-based GUI for managing Homebrew packages on macOS and Linux. This 
 - **Real-time Streaming**: Watch package operations in real-time with live output
 - **Sudo Integration**: Seamless handling of operations requiring administrator privileges
 - **Package Information**: Detailed information about each package including descriptions, versions, and homepages
+- **Backup & Restore**: Export your installed formulae and casks and reinstall them later to recreate the same setup
+  with automatic daily refresh of the cached package list and a manual refresh option
 
 ### 🎨 Modern Interface
 - **Dark Theme**: Beautiful dark mode interface optimized for long usage sessions
@@ -213,6 +215,8 @@ The application provides a REST API for programmatic access:
 - `POST /api/install` - Install a package
 - `POST /api/uninstall` - Uninstall a package
 - `POST /api/upgrade` - Upgrade packages
+- `GET /api/backup` - Export lists of installed formulae and casks
+- `POST /api/restore` - Install packages from a previously generated backup
 
 ### Streaming Operations
 
@@ -285,7 +289,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - [ ] **Batch Uninstall**: Allow selecting multiple packages for bulk uninstallation
 - [ ] **Package Categories**: Organize packages by category (development, utilities, etc.)
 - [ ] **Export/Import**: Export package lists and import them on other systems
-- [ ] **Backup/Restore**: Create backups of current package state
+- [ ] **Backup/Restore**: Export installed packages to a backup file and restore them on another machine
 - [ ] **Sudo Password Integration**: Fix in-app sudo password handling for seamless administrative operations
 
 ### Medium Priority
