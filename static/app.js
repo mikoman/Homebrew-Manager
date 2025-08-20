@@ -203,7 +203,7 @@ async function upgradePackages(formulae, casks, displayName) {
   const runWithPassword = async (password) => {
     activityClear();
     activityAppend('start', 'Starting upgrade...');
-    const response = await fetch('/api/upgrade_stream', {
+    const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ formulae, casks, sudo_password: password })
@@ -249,7 +249,13 @@ async function upgradePackages(formulae, casks, displayName) {
       try {
         const pwd = await showPasswordDialog('upgrade', displayName);
         if (pwd) {
-          window.__SUDO_PWD__ = pwd;
+  if (sudoPwd) {
+    const ok = await runWithPassword(sudoPwd);
+    if (!ok) {
+      try {
+        const pwd = await showPasswordDialog('upgrade', displayName);
+        if (pwd) {
+          sudoPwd = pwd;
           await runWithPassword(pwd);
         }
       } catch (e) {
@@ -282,7 +288,8 @@ async function upgradePackages(formulae, casks, displayName) {
           try {
             const pwd = window.__SUDO_PWD__ || await showPasswordDialog('upgrade', displayName);
             if (pwd) {
-              window.__SUDO_PWD__ = pwd;
+            const pwd = await showPasswordDialog('upgrade', displayName);
+            if (pwd) {
               await runWithPassword(pwd);
             }
           } catch (e) {
