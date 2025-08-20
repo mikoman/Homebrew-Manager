@@ -424,6 +424,24 @@ class BrewManager:
             logs["all"] = self.run(["upgrade"])  # upgrade everything outdated
         return logs
 
+    def backup(self) -> dict:
+        """Return lists of installed formulae and casks for backup purposes."""
+        formulae_out = self.run(["list", "--formula", "-1"])
+        casks_out = self.run(["list", "--cask", "-1"])
+        return {
+            "formulae": [line.strip() for line in formulae_out.splitlines() if line.strip()],
+            "casks": [line.strip() for line in casks_out.splitlines() if line.strip()],
+        }
+
+    def restore(self, formulae: Optional[List[str]] = None, casks: Optional[List[str]] = None, sudo_password: Optional[str] = None) -> dict:
+        """Install packages from a backup list."""
+        logs: Dict[str, str] = {}
+        if formulae:
+            logs["formulae"] = self.run(["install", *formulae], sudo_password=sudo_password)
+        if casks:
+            logs["casks"] = self.run(["install", "--cask", *casks], sudo_password=sudo_password)
+        return logs
+
     def search(self, query: str) -> dict:
         # Simple name search for both kinds
         f_out = self.run(["search", "--formula", query])
@@ -748,6 +766,9 @@ class Handler(SimpleHTTPRequestHandler):
             if path == "/api/installed":
                 self._send_json(brew.installed_info())
                 return
+            if path == "/api/backup":
+                self._send_json(brew.backup())
+                return
             if path == "/api/outdated":
                 self._send_json(brew.outdated())
                 return
@@ -833,10 +854,17 @@ class Handler(SimpleHTTPRequestHandler):
                 log = brew.uninstall(name, kind)
                 self._send_json({"ok": True, "log": log})
                 return
+            if path == "/api/restore":
+                formulae = body.get("formulae") or []
+                casks = body.get("casks") or []
+                sudo_password = body.get("sudo_password")
+                logs = brew.restore(formulae=formulae, casks=casks, sudo_password=sudo_password)
+                self._send_json({"ok": True, "logs": logs})
+                return
             self.send_error(404, "Unknown API endpoint")
         except BrewError as e:
             error_response = {
-                "ok": False, 
+                "ok": False,
                 "error": str(e),
                 "needs_sudo": getattr(e, 'needs_sudo', False),
                 "permission_issue": getattr(e, 'permission_issue', False)

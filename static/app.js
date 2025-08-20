@@ -1,6 +1,9 @@
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 let OUTDATED_SET = new Set();
+const BACKUP_CACHE_KEY = 'hbw_backup_cache';
+const BACKUP_CACHE_TIME_KEY = 'hbw_backup_cache_time';
+const BACKUP_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 1 day
 
 // Debug helper: enable via localStorage.setItem('hbw_debug','1')
 function dbg(...args) {
@@ -192,6 +195,22 @@ function streamSSE(url, { onStart, onLog, onEnd, onError } = {}) {
   es.addEventListener('end', (e) => { onEnd?.(e.data); close(); });
   es.addEventListener('error', (e) => { onError?.(e.data || 'stream error'); close(); });
   return close;
+}
+
+async function refreshBackupCache(force = false) {
+  try {
+    const last = Number(localStorage.getItem(BACKUP_CACHE_TIME_KEY) || 0);
+    const now = Date.now();
+    if (!force && last && (now - last) < BACKUP_MAX_AGE_MS) return;
+    activityAppend('start', 'Refreshing package cache...');
+    const data = await api('/api/backup');
+    localStorage.setItem(BACKUP_CACHE_KEY, JSON.stringify(data));
+    localStorage.setItem(BACKUP_CACHE_TIME_KEY, String(now));
+    activityAppend('end', 'Package cache refreshed');
+  } catch (e) {
+    activityAppend('error', e.message || 'Failed to refresh cache');
+    toast(e.message || 'Failed to refresh cache');
+  }
 }
 
 function renderOutdated(data) {
@@ -772,6 +791,7 @@ async function handleInfo(name, kind) {
 function initEvents() {
   $$('.tab').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
   $('#btn-update').addEventListener('click', (e) => withButtonLoading(e.currentTarget, doUpdate));
+  $('#btn-refresh-backup').addEventListener('click', (e) => withButtonLoading(e.currentTarget, () => refreshBackupCache(true)));
   $('#btn-upgrade-selected').addEventListener('click', (e) => withButtonLoading(e.currentTarget, doUpgradeSelected));
   $('#btn-remove-deprecated')?.addEventListener('click', (e) => withButtonLoading(e.currentTarget, removeAllDeprecated));
   $('#btn-search').addEventListener('click', (e) => withButtonLoading(e.currentTarget, doSearch));
@@ -1038,6 +1058,7 @@ async function boot() {
     const updateBtn = $('#btn-update');
     if (updateBtn) updateBtn.style.display = 'none';
   }
+  await refreshBackupCache();
   await refreshSummary();
 }
 
