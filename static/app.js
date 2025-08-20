@@ -249,13 +249,7 @@ async function upgradePackages(formulae, casks, displayName) {
       try {
         const pwd = await showPasswordDialog('upgrade', displayName);
         if (pwd) {
-  if (sudoPwd) {
-    const ok = await runWithPassword(sudoPwd);
-    if (!ok) {
-      try {
-        const pwd = await showPasswordDialog('upgrade', displayName);
-        if (pwd) {
-          sudoPwd = pwd;
+          window.__SUDO_PWD__ = pwd;
           await runWithPassword(pwd);
         }
       } catch (e) {
@@ -288,7 +282,7 @@ async function upgradePackages(formulae, casks, displayName) {
           try {
             const pwd = window.__SUDO_PWD__ || await showPasswordDialog('upgrade', displayName);
             if (pwd) {
-            if (pwd) {
+              window.__SUDO_PWD__ = pwd;
               await runWithPassword(pwd);
             }
           } catch (e) {
