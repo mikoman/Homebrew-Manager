@@ -288,7 +288,6 @@ async function upgradePackages(formulae, casks, displayName) {
           try {
             const pwd = window.__SUDO_PWD__ || await showPasswordDialog('upgrade', displayName);
             if (pwd) {
-            const pwd = await showPasswordDialog('upgrade', displayName);
             if (pwd) {
               await runWithPassword(pwd);
             }
