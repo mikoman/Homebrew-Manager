@@ -11,6 +11,7 @@ A modern, web-based GUI for managing Homebrew packages on macOS and Linux. This 
 - **Search & Install**: Search for new packages and install them directly from the interface
 - **Uninstall Packages**: Remove packages with a single click
 - **Package Categories**: Filter installed packages by category (development, utilities, etc.)
+- **Snappy Searches**: In-memory caching and batched metadata lookups make package listing and search incredibly fast
 
 ### 🔍 Advanced Features
 - **Orphaned Package Detection**: Identify packages that were installed as dependencies but are no longer needed
@@ -329,7 +330,9 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - [ ] **Integration APIs**: Webhook support for CI/CD integration
 
 ### Technical Improvements
-- [ ] **Performance Optimization**: Faster package listing and search
+- [x] **Performance Optimization**: Faster package listing and search via in-memory caching and batched metadata retrieval
+  - Stores recent search results and installed package data in a short-lived cache
+  - Retrieves descriptions for multiple packages in a single `brew info` call to minimize process overhead
 - [ ] **Offline Mode**: Basic functionality when Homebrew is unavailable
 - [ ] **Configuration File**: User preferences and settings persistence
 - [ ] **Logging System**: Comprehensive logging for debugging
