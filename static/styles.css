@@ -375,7 +375,8 @@ body {
 }
 
 .main-search input {
-  padding-right: 120px;
+  /* Ensure consistent spacing around search text */
+  padding: 12px 120px 12px 40px;
 }
 
 /* Section tools search container */

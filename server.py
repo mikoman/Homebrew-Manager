@@ -563,19 +563,54 @@ class BrewManager:
         return logs
 
     def search(self, query: str) -> dict:
-        # Simple name search for both kinds
-        f_out = self.run(["search", "--formula", query])
-        c_out = self.run(["search", "--cask", query])
-        def parse_list(text):
+        """Search for formulae and casks using flexible token matching.
+
+        Homebrew's ``brew search`` requires fairly exact strings and exits with
+        a non-zero status when nothing is found.  To provide a better UX we:
+
+        * Safely execute searches, treating "not found" as an empty result
+        * Split the query into tokens and ensure all tokens appear in the
+          results, enabling searches like "tencent lemon"
+        * Fall back to a hyphen-joined version of the query
+        """
+
+        def parse_list(text: str) -> list:
             items = []
             for line in text.splitlines():
                 name = line.strip()
                 if name and not name.startswith("==>"):
                     items.append(name)
             return items
-        
-        formulae = parse_list(f_out)
-        casks = parse_list(c_out)
+
+        def safe_search(kind: str, term: str) -> list:
+            try:
+                return parse_list(self.run(["search", f"--{kind}", term]))
+            except BrewError:
+                # brew search returns a non-zero exit code when no matches are
+                # found; treat this as an empty result instead of an error
+                return []
+
+        tokens = [t for t in query.split() if t]
+
+        # Initial search with the raw query
+        formulae = safe_search("formula", query)
+        casks = safe_search("cask", query)
+
+        # If the query contains multiple tokens, ensure results contain all
+        # tokens (order independent)
+        if len(tokens) > 1:
+            f_sets = [set(safe_search("formula", t)) for t in tokens]
+            c_sets = [set(safe_search("cask", t)) for t in tokens]
+            if f_sets:
+                formulae = sorted(set(formulae) | set.intersection(*f_sets))
+            if c_sets:
+                casks = sorted(set(casks) | set.intersection(*c_sets))
+
+        # If still nothing and tokens exist, try hyphen-joined query
+        if not formulae and not casks and len(tokens) > 1:
+            hyphen_query = "-".join(tokens)
+            formulae = safe_search("formula", hyphen_query)
+            casks = safe_search("cask", hyphen_query)
         
         # Enhance with descriptions (limit to first 20 results for performance)
         enhanced_formulae = []
