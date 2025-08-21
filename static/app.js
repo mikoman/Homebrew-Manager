@@ -203,7 +203,6 @@ function showActivityPanel() {
   const panel = $('#activity');
   if (panel) {
     panel.classList.remove('hidden');
-    scheduleActivityHide();
   }
 }
 
@@ -218,12 +217,17 @@ function scheduleActivityHide() {
 function activityClear() {
   const root = $('#activity-log');
   if (root) root.innerHTML = '';
-  scheduleActivityHide();
+  clearTimeout(activityHideTimer);
 }
 function activityAppend(kind, text) {
   const root = $('#activity-log');
   if (!root) return;
   showActivityPanel();
+  if (kind === 'end' || kind === 'error') {
+    scheduleActivityHide();
+  } else {
+    clearTimeout(activityHideTimer);
+  }
   const line = document.createElement('div');
   line.className = 'activity-line';
   const tag = document.createElement('span');
