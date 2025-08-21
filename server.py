@@ -466,7 +466,10 @@ class BrewManager:
                 item["size"] = u.get("human")
         for item in casks_list:
             item["category"] = categorize_item(item)
-            u = size_map.get(item.get("name"))
+            key = item.get("token") or item.get("name")
+            if isinstance(key, list):
+                key = key[0] if key else None
+            u = size_map.get(key)
             if u:
                 item["size_kb"] = u.get("kilobytes")
                 item["size"] = u.get("human")
