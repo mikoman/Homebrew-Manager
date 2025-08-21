@@ -18,8 +18,7 @@ A modern, web-based GUI for managing Homebrew packages on macOS and Linux. This 
 - **Real-time Streaming**: Watch package operations in real-time with live output
 - **Sudo Integration**: Seamless handling of operations requiring administrator privileges
 - **Package Information**: Detailed information about each package including descriptions, versions, and homepages
-- **Backup & Restore**: Export your installed formulae and casks and reinstall them later to recreate the same setup
-  with automatic daily refresh of the cached package list and a manual refresh option
+- **Package Dependencies View**: Explore comprehensive dependency trees for any installed package with an interactive, collapsible tree interface that highlights required and optional dependencies
 
 ### 🎨 Modern Interface
 - **Dark Theme**: Beautiful dark mode interface optimized for long usage sessions
@@ -27,6 +26,15 @@ A modern, web-based GUI for managing Homebrew packages on macOS and Linux. This 
 - **Activity Panel**: Real-time activity log showing all operations
 - **Toast Notifications**: Instant feedback for user actions
 - **Keyboard Shortcuts**: Efficient navigation and operation shortcuts
+
+### 🌳 Package Dependencies View
+The dependency view provides a clear visualization of how packages relate to one another.
+
+- **Interactive Tree**: Expand and collapse nodes to explore nested dependencies without losing context
+- **Visual Hierarchy**: Indentation, connector lines, and icons distinguish parents from children
+- **Color Coding**: Required and optional dependencies use different colors for quick scanning
+- **Inline Search**: Filter nodes instantly as you type to locate specific dependencies
+- **Responsive & Accessible**: Keyboard navigation, ARIA labels, and touch-friendly targets ensure usability for everyone
 
 ## 🚀 Quick Start
 
@@ -121,7 +129,7 @@ Before using Homebrew Manager, you need to have the following installed:
 
 ### Main Interface
 
-The application has four main tabs:
+The application has five main tabs:
 
 #### 📦 Packages Tab
 - **Outdated Packages**: View and upgrade packages that have newer versions available
@@ -141,6 +149,11 @@ The application has four main tabs:
 - Search for new packages to install
 - Browse formulae and casks with descriptions
 - Install packages directly from search results
+
+#### 🌳 Dependencies Tab
+- Visualize dependency trees for any installed package
+- Expand and collapse nodes to explore nested dependencies
+- Search within the tree and highlight missing or outdated dependencies
 
 ### Common Operations
 
@@ -163,6 +176,13 @@ The application has four main tabs:
 #### Uninstalling Packages
 - Click the uninstall button next to any installed package
 - Confirm the action in the dialog
+
+#### Viewing Package Dependencies
+1. Open the **Dependencies** tab
+2. Select a package from the list to reveal its dependency tree
+3. Expand or collapse nodes to navigate through nested dependencies
+4. Use the filter box to locate dependencies by name
+5. Missing dependencies appear in red; outdated ones in orange
 
 ### Sudo Operations
 
@@ -213,6 +233,7 @@ The application provides a REST API for programmatic access:
 - `GET /api/summary` - Get overview of all packages
 - `GET /api/outdated` - List outdated packages
 - `GET /api/installed` - List all installed packages
+- `GET /api/dependencies?name=<pkg>&type=formula|cask` - Get dependency tree for a package
 - `GET /api/search?q=<query>` - Search for packages
 - `POST /api/install` - Install a package
 - `POST /api/uninstall` - Uninstall a package
@@ -287,7 +308,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## 🚧 TODO Features
 
 ### High Priority
-- [ ] **Package Dependencies View**: Show dependency trees for installed packages
 - [ ] **Batch Uninstall**: Allow selecting multiple packages for bulk uninstallation
 - [ ] **Export/Import**: Export package lists and import them on other systems
 - [ ] **Backup/Restore**: Export installed packages to a backup file and restore them on another machine

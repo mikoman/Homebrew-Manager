@@ -478,6 +478,43 @@ class BrewManager:
                 })
         return {"formulae": orphaned_list, "casks": []}
 
+    def dependency_tree(self, name: str, kind: str = "formula") -> dict:
+        """Return dependency tree for a given package."""
+
+        visited = set()
+
+        def build(node_name: str, node_kind: str = "formula", optional: bool = False) -> dict:
+            key = (node_kind, node_name)
+            if key in visited:
+                return {"name": node_name, "type": node_kind, "optional": optional, "deps": []}
+            visited.add(key)
+
+            if node_kind == "cask":
+                info = self.run(["info", "--json=v2", "--cask", node_name], capture_json=True)
+                items = info.get("casks", [])
+                details = items[0] if items else {}
+                depends = details.get("depends_on", {}) or {}
+                formulae = depends.get("formula", []) if isinstance(depends, dict) else []
+                casks = depends.get("cask", []) if isinstance(depends, dict) else []
+                children = [build(d, "formula") for d in formulae]
+                children.extend(build(d, "cask") for d in casks)
+                return {"name": node_name, "type": "cask", "optional": optional, "deps": children}
+
+            info = self.run(["info", "--json=v2", "--formula", node_name], capture_json=True)
+            items = info.get("formulae", [])
+            details = items[0] if items else {}
+            req = []
+            req.extend(details.get("dependencies", []) or [])
+            req.extend(details.get("build_dependencies", []) or [])
+            req.extend(details.get("test_dependencies", []) or [])
+            req.extend(details.get("recommended_dependencies", []) or [])
+            opt = details.get("optional_dependencies", []) or []
+            children = [build(d, "formula") for d in req]
+            children.extend(build(d, "formula", True) for d in opt)
+            return {"name": node_name, "type": "formula", "optional": optional, "deps": children}
+
+        return build(name, kind)
+
     # Actions
     def needs_update(self) -> bool:
         # Check if homebrew needs updating by checking outdated status
@@ -876,10 +913,18 @@ class Handler(SimpleHTTPRequestHandler):
                     return
                 self._send_json(brew.info(name, kind))
                 return
+            if path == "/api/dependencies":
+                name = (qs.get("name", [""])[0] or "").strip()
+                kind = (qs.get("type", ["formula"])[0] or "formula").strip()
+                if not name:
+                    self._send_json({}, 400)
+                    return
+                self._send_json(brew.dependency_tree(name, kind))
+                return
             self.send_error(404, "Unknown API endpoint")
         except BrewError as e:
             error_response = {
-                "ok": False, 
+                "ok": False,
                 "error": str(e),
                 "needs_sudo": getattr(e, 'needs_sudo', False),
                 "permission_issue": getattr(e, 'permission_issue', False)
