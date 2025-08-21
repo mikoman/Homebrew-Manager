@@ -14,12 +14,14 @@ A modern, web-based GUI for managing Homebrew packages on macOS and Linux. This 
 - **Snappy Searches**: In-memory caching and batched metadata lookups make package listing and search incredibly fast
 
 ### 🔍 Advanced Features
+- **Offline Mode**: Continue browsing cached package data when Homebrew is unavailable
 - **Orphaned Package Detection**: Identify packages that were installed as dependencies but are no longer needed
 - **Deprecated Package Alerts**: Get notified about deprecated or disabled packages
 - **Real-time Streaming**: Watch package operations in real-time with live output
 - **Sudo Integration**: Seamless handling of operations requiring administrator privileges
 - **Package Information**: Detailed information about each package including descriptions, versions, and homepages
 - **Package Dependencies View**: Explore comprehensive dependency trees for any installed package with an interactive, collapsible tree interface that highlights required and optional dependencies
+- **Comprehensive Logging**: Server-side logging for easier debugging
 
 ### 🎨 Modern Interface
 - **Dark Theme**: Beautiful dark mode interface optimized for long usage sessions
@@ -333,9 +335,9 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - [x] **Performance Optimization**: Faster package listing and search via in-memory caching and batched metadata retrieval
   - Stores recent search results and installed package data in a short-lived cache
   - Retrieves descriptions for multiple packages in a single `brew info` call to minimize process overhead
-- [ ] **Offline Mode**: Basic functionality when Homebrew is unavailable
+- [x] **Offline Mode**: Basic functionality when Homebrew is unavailable
 - [ ] **Configuration File**: User preferences and settings persistence
-- [ ] **Logging System**: Comprehensive logging for debugging
+- [x] **Logging System**: Comprehensive logging for debugging
 - [ ] **Unit Tests**: Comprehensive test coverage
 - [ ] **Docker Support**: Containerized deployment option
 
