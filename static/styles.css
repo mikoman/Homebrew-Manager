@@ -252,11 +252,24 @@ body {
   line-height: 1.5;
 }
 
-.section-tools { 
-  display: flex; 
-  align-items: center; 
-  gap: 16px; 
+.section-tools {
+  display: flex;
+  align-items: center;
+  gap: 16px;
   color: var(--text-secondary);
+}
+/* Category filter dropdown */
+.category-filter {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 8px 12px;
+}
+.category-filter:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(91, 156, 255, 0.1);
 }
 /* Search input containers */
 .search-input-container {

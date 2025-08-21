@@ -19,6 +19,83 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(PROJECT_ROOT, "static")
 
 
+# Basic keyword-based categories for packages
+CATEGORY_KEYWORDS = {
+    "development": [
+        "compiler",
+        "build",
+        "code",
+        "programming",
+        "sdk",
+        "language",
+        "git",
+        "deploy",
+    ],
+    "utilities": [
+        "utility",
+        "tool",
+        "command-line",
+        "helper",
+        "file",
+        "archive",
+        "compression",
+        "encrypt",
+        "monitor",
+    ],
+    "networking": [
+        "network",
+        "ssh",
+        "http",
+        "dns",
+        "server",
+        "proxy",
+        "ftp",
+        "socket",
+        "vpn",
+        "web",
+    ],
+    "database": [
+        "database",
+        "sql",
+        "mysql",
+        "postgres",
+        "mongo",
+        "sqlite",
+        "redis",
+        "cassandra",
+    ],
+    "media": [
+        "audio",
+        "video",
+        "image",
+        "media",
+        "music",
+        "photo",
+        "graphics",
+        "ffmpeg",
+    ],
+    "system": [
+        "system",
+        "kernel",
+        "hardware",
+        "driver",
+        "daemon",
+        "process",
+    ],
+}
+DEFAULT_CATEGORY = "other"
+
+
+def categorize_item(item: Dict[str, Union[str, List[str]]]) -> str:
+    """Assign a simple category based on name/description keywords."""
+    text = f"{item.get('name', '')} {item.get('desc', '')}".lower()
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        for kw in keywords:
+            if kw in text:
+                return category
+    return DEFAULT_CATEGORY
+
+
 def find_brew_path() -> str:
     # Try PATH first
     path = shutil.which("brew")
@@ -328,9 +405,15 @@ class BrewManager:
     def installed_info(self) -> dict:
         formulae = self.run(["info", "--json=v2", "--installed", "--formula"], capture_json=True)
         casks = self.run(["info", "--json=v2", "--installed", "--cask"], capture_json=True)
+        formulae_list = formulae.get("formulae", [])
+        casks_list = casks.get("casks", [])
+        for item in formulae_list:
+            item["category"] = categorize_item(item)
+        for item in casks_list:
+            item["category"] = categorize_item(item)
         return {
-            "formulae": formulae.get("formulae", []),
-            "casks": casks.get("casks", []),
+            "formulae": formulae_list,
+            "casks": casks_list,
         }
 
     def leaves(self) -> List[str]:
@@ -459,6 +542,24 @@ class BrewManager:
             logs["casks"] = self.run(["upgrade", "--cask", *casks])
         if not formulae and not casks:
             logs["all"] = self.run(["upgrade"])  # upgrade everything outdated
+        return logs
+
+    def backup(self) -> dict:
+        """Return lists of installed formulae and casks for backup purposes."""
+        formulae_out = self.run(["list", "--formula", "-1"])
+        casks_out = self.run(["list", "--cask", "-1"])
+        return {
+            "formulae": [line.strip() for line in formulae_out.splitlines() if line.strip()],
+            "casks": [line.strip() for line in casks_out.splitlines() if line.strip()],
+        }
+
+    def restore(self, formulae: Optional[List[str]] = None, casks: Optional[List[str]] = None, sudo_password: Optional[str] = None) -> dict:
+        """Install packages from a backup list."""
+        logs: Dict[str, str] = {}
+        if formulae:
+            logs["formulae"] = self.run(["install", *formulae], sudo_password=sudo_password)
+        if casks:
+            logs["casks"] = self.run(["install", "--cask", *casks], sudo_password=sudo_password)
         return logs
 
     def search(self, query: str) -> dict:
@@ -785,6 +886,9 @@ class Handler(SimpleHTTPRequestHandler):
             if path == "/api/installed":
                 self._send_json(brew.installed_info())
                 return
+            if path == "/api/backup":
+                self._send_json(brew.backup())
+                return
             if path == "/api/outdated":
                 self._send_json(brew.outdated())
                 return
@@ -878,10 +982,17 @@ class Handler(SimpleHTTPRequestHandler):
                 log = brew.uninstall(name, kind)
                 self._send_json({"ok": True, "log": log})
                 return
+            if path == "/api/restore":
+                formulae = body.get("formulae") or []
+                casks = body.get("casks") or []
+                sudo_password = body.get("sudo_password")
+                logs = brew.restore(formulae=formulae, casks=casks, sudo_password=sudo_password)
+                self._send_json({"ok": True, "logs": logs})
+                return
             self.send_error(404, "Unknown API endpoint")
         except BrewError as e:
             error_response = {
-                "ok": False, 
+                "ok": False,
                 "error": str(e),
                 "needs_sudo": getattr(e, 'needs_sudo', False),
                 "permission_issue": getattr(e, 'permission_issue', False)

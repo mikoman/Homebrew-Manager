@@ -10,6 +10,7 @@ A modern, web-based GUI for managing Homebrew packages on macOS and Linux. This 
 - **Bulk Operations**: Select multiple packages for batch upgrade operations
 - **Search & Install**: Search for new packages and install them directly from the interface
 - **Uninstall Packages**: Remove packages with a single click
+- **Package Categories**: Filter installed packages by category (development, utilities, etc.)
 
 ### 🔍 Advanced Features
 - **Orphaned Package Detection**: Identify packages that were installed as dependencies but are no longer needed
@@ -134,6 +135,7 @@ The application has five main tabs:
 - **Outdated Packages**: View and upgrade packages that have newer versions available
 - **All Installed Packages**: Browse, search, and manage all installed packages
 - **Bulk Operations**: Select multiple packages for batch upgrades
+- **Category Filter**: Use the category dropdown to focus on development tools, utilities, and more
 
 #### 🗑️ Orphaned Tab
 - View packages that were installed as dependencies but are no longer needed
@@ -236,6 +238,8 @@ The application provides a REST API for programmatic access:
 - `POST /api/install` - Install a package
 - `POST /api/uninstall` - Uninstall a package
 - `POST /api/upgrade` - Upgrade packages
+- `GET /api/backup` - Export lists of installed formulae and casks
+- `POST /api/restore` - Install packages from a previously generated backup
 
 ### Streaming Operations
 
@@ -305,9 +309,8 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ### High Priority
 - [ ] **Batch Uninstall**: Allow selecting multiple packages for bulk uninstallation
-- [ ] **Package Categories**: Organize packages by category (development, utilities, etc.)
 - [ ] **Export/Import**: Export package lists and import them on other systems
-- [ ] **Backup/Restore**: Create backups of current package state
+- [ ] **Backup/Restore**: Export installed packages to a backup file and restore them on another machine
 - [ ] **Sudo Password Integration**: Fix in-app sudo password handling for seamless administrative operations
 
 ### Medium Priority

@@ -1,6 +1,9 @@
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 let OUTDATED_SET = new Set();
+const BACKUP_CACHE_KEY = 'hbw_backup_cache';
+const BACKUP_CACHE_TIME_KEY = 'hbw_backup_cache_time';
+const BACKUP_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 1 day
 
 // Debug helper: enable via localStorage.setItem('hbw_debug','1')
 function dbg(...args) {
@@ -194,6 +197,22 @@ function streamSSE(url, { onStart, onLog, onEnd, onError } = {}) {
   return close;
 }
 
+async function refreshBackupCache(force = false) {
+  try {
+    const last = Number(localStorage.getItem(BACKUP_CACHE_TIME_KEY) || 0);
+    const now = Date.now();
+    if (!force && last && (now - last) < BACKUP_MAX_AGE_MS) return;
+    activityAppend('start', 'Refreshing package cache...');
+    const data = await api('/api/backup');
+    localStorage.setItem(BACKUP_CACHE_KEY, JSON.stringify(data));
+    localStorage.setItem(BACKUP_CACHE_TIME_KEY, String(now));
+    activityAppend('end', 'Package cache refreshed');
+  } catch (e) {
+    activityAppend('error', e.message || 'Failed to refresh cache');
+    toast(e.message || 'Failed to refresh cache');
+  }
+}
+
 function renderOutdated(data) {
   const root = $('#outdated-list');
   const header = $('#outdated-header');
@@ -319,7 +338,6 @@ function renderDeprecated(data) {
 function renderInstalled(data) {
   const root = $('#installed-list');
   if (!root) return;
-  root.innerHTML = '';
   const { formulae = [], casks = [] } = data || {};
   const all = [
     ...formulae.map(x => ({ ...x, __type: 'formula' })),
@@ -339,40 +357,36 @@ function renderInstalled(data) {
     root.innerHTML = `<div class="empty">Nothing installed</div>`;
     return;
   }
-  for (const item of all) {
-    const key = getItemKeyName(item);
-    const display = getItemDisplayName(item);
-    const version = (item.versions && item.versions.stable) || item.version || '';
-    const descStr = getItemDesc(item);
-    const description = descStr && descStr.trim() ? descStr : '';
-    const card = document.createElement('div');
-    card.className = 'card';
-    card.innerHTML = `
-      <div class="title">${display}</div>
-      ${description ? `<div class="description">${description}</div>` : ''}
-      <div class="subtitle">${item.__type}${version ? ` • ${version}` : ''}</div>
-      <div class="controls">
-        ${OUTDATED_SET.has(key) ? `<button class="btn small" data-upgrade-one-name="${key}" data-upgrade-one-kind="${item.__type}">Upgrade</button>` : ''}
-        <button class="btn small" data-uninstall-name="${key}" data-uninstall-kind="${item.__type}" data-display-name="${display}">Uninstall</button>
-      </div>
-    `;
-    root.appendChild(card);
+
+  // Populate categories dropdown
+  const categories = Array.from(new Set(all.map(x => x.category).filter(Boolean))).sort();
+  if (select) {
+    const current = select.value;
+    select.innerHTML = '<option value="">All Categories</option>' +
+      categories.map(c => `<option value="${c}">${c.charAt(0).toUpperCase() + c.slice(1)}</option>`).join('');
+    if (current && categories.includes(current)) {
+      select.value = current;
+    }
   }
-  attachUninstallHandlers(root);
+
+  applyInstalledFilter();
 }
 
 function applyInstalledFilter() {
   const q = ($('#installed-search')?.value || '').trim().toLowerCase();
+  const selectedCategory = $('#installed-category')?.value || '';
   const items = window.__INSTALLED_CACHE__ || [];
   const root = $('#installed-list');
   if (!root) return;
   root.innerHTML = '';
-  const filtered = q ? items.filter(it => {
+  const filtered = items.filter(it => {
     const key = getItemKeyName(it).toLowerCase();
     const disp = getItemDisplayName(it).toLowerCase();
     const desc = getItemDesc(it).toLowerCase();
-    return key.includes(q) || disp.includes(q) || desc.includes(q);
-  }) : items;
+    const matchesQuery = q ? (key.includes(q) || disp.includes(q) || desc.includes(q)) : true;
+    const matchesCategory = selectedCategory ? it.category === selectedCategory : true;
+    return matchesQuery && matchesCategory;
+  });
   if (!filtered.length) {
     root.innerHTML = `<div class="empty">No matches</div>`;
     return;
@@ -864,6 +878,7 @@ function filterDependencyTree() {
 function initEvents() {
   $$('.tab').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
   $('#btn-update').addEventListener('click', (e) => withButtonLoading(e.currentTarget, doUpdate));
+  $('#btn-refresh-backup').addEventListener('click', (e) => withButtonLoading(e.currentTarget, () => refreshBackupCache(true)));
   $('#btn-upgrade-selected').addEventListener('click', (e) => withButtonLoading(e.currentTarget, doUpgradeSelected));
   $('#btn-remove-deprecated')?.addEventListener('click', (e) => withButtonLoading(e.currentTarget, removeAllDeprecated));
   $('#btn-search').addEventListener('click', (e) => withButtonLoading(e.currentTarget, doSearch));
@@ -874,6 +889,7 @@ function initEvents() {
   const searchClear = $('#search-input-clear');
   const installedSearch = $('#installed-search');
   const installedClear = $('#installed-search-clear');
+  const installedCategory = $('#installed-category');
   
   // Show/hide clear buttons based on input content
   function updateClearButton(input, clearBtn) {
@@ -902,6 +918,11 @@ function initEvents() {
       updateClearButton(installedSearch, installedClear);
       applyInstalledFilter();
       installedSearch.focus();
+    });
+  }
+  if (installedCategory) {
+    installedCategory.addEventListener('change', () => {
+      applyInstalledFilter();
     });
   }
   $('#chk-select-all')?.addEventListener('change', (e) => {
@@ -1140,6 +1161,7 @@ async function boot() {
     const updateBtn = $('#btn-update');
     if (updateBtn) updateBtn.style.display = 'none';
   }
+  await refreshBackupCache();
   await refreshSummary();
 }
 

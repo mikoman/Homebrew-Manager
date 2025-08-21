@@ -14,6 +14,7 @@
     <div class="brand">🍺 Homebrew Manager</div>
     <div class="actions">
       <button id="btn-update" class="btn primary" title="Update Homebrew repositories and metadata" style="display: none;">Update Homebrew</button>
+      <button id="btn-refresh-backup" class="btn" title="Refresh cached package list">Refresh Packages</button>
       <button id="btn-settings" class="btn" title="Settings">⚙️</button>
     </div>
   </header>
@@ -40,6 +41,9 @@
       <div class="section-header" style="margin-top:18px;">
         <h2>All Installed Packages</h2>
         <div class="section-tools">
+          <select id="installed-category" class="category-filter">
+            <option value="">All Categories</option>
+          </select>
           <div class="search-input-container">
             <span class="search-icon">🔍</span>
             <input id="installed-search" type="text" placeholder="Filter installed packages..." />
