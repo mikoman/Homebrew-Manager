@@ -316,7 +316,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ### Medium Priority
 - [ ] **Custom Taps Support**: Manage custom Homebrew taps
 - [ ] **Package History**: Track installation/uninstallation history
-- [ ] **Disk Usage Analysis**: Show disk space used by packages
 - [ ] **Update Scheduling**: Schedule automatic updates
 - [ ] **Notification System**: Desktop notifications for updates
 - [ ] **Keyboard Shortcuts**: Add more keyboard shortcuts for power users

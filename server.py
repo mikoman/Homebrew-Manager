@@ -96,6 +96,37 @@ def categorize_item(item: Dict[str, Union[str, List[str]]]) -> str:
     return DEFAULT_CATEGORY
 
 
+def dir_size_kb(path: str) -> int:
+    """Calculate directory size in kilobytes."""
+    try:
+        result = subprocess.run(["du", "-sk", path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode == 0 and result.stdout:
+            return int(result.stdout.split()[0])
+    except Exception:
+        pass
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            fp = os.path.join(root, f)
+            try:
+                total += os.path.getsize(fp)
+            except OSError:
+                continue
+    return total // 1024
+
+
+def human_size(kb: int) -> str:
+    """Convert kilobytes to human readable string."""
+    units = ["KB", "MB", "GB", "TB", "PB"]
+    size = float(kb)
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            if unit == "KB":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024
+
+
 def find_brew_path() -> str:
     # Try PATH first
     path = shutil.which("brew")
@@ -369,7 +400,9 @@ class BrewManager:
         formulae = data.get("formulae", [])
         casks = data.get("casks", [])
         
-        # Get descriptions for outdated formulae
+        # Get descriptions and disk usage for outdated formulae
+        usage = self.disk_usage()
+        size_map = {u["name"]: u for u in usage.get("formulae", [])}
         for formula in formulae:
             try:
                 # Get info for each formula individually to be more reliable
@@ -382,8 +415,13 @@ class BrewManager:
             except Exception as e:
                 print(f"Failed to fetch description for formula {formula['name']}: {e}")
                 formula["desc"] = ""
-        
-        # Get descriptions for outdated casks
+            u = size_map.get(formula.get("name"))
+            if u:
+                formula["size_kb"] = u.get("kilobytes")
+                formula["size"] = u.get("human")
+
+        # Get descriptions and disk usage for outdated casks
+        size_map_c = {u["name"]: u for u in usage.get("casks", [])}
         for cask in casks:
             try:
                 # Get info for each cask individually to be more reliable
@@ -396,6 +434,10 @@ class BrewManager:
             except Exception as e:
                 print(f"Failed to fetch description for cask {cask['name']}: {e}")
                 cask["desc"] = ""
+            u = size_map_c.get(cask.get("name"))
+            if u:
+                cask["size_kb"] = u.get("kilobytes")
+                cask["size"] = u.get("human")
         
         return {
             "formulae": formulae,
@@ -403,21 +445,77 @@ class BrewManager:
         }
 
     def installed_info(self) -> dict:
-        formulae = self.run(["info", "--json=v2", "--installed", "--formula"], capture_json=True)
-        casks = self.run(["info", "--json=v2", "--installed", "--cask"], capture_json=True)
+        try:
+            formulae = self.run(["info", "--json=v2", "--installed", "--formula"], capture_json=True)
+        except BrewError:
+            formulae = {"formulae": []}
+        try:
+            casks = self.run(["info", "--json=v2", "--installed", "--cask"], capture_json=True)
+        except BrewError:
+            casks = {"casks": []}
         formulae_list = formulae.get("formulae", [])
         casks_list = casks.get("casks", [])
+        usage = self.disk_usage()
+        size_map = {u["name"]: u for u in usage.get("formulae", [])}
+        size_map.update({u["name"]: u for u in usage.get("casks", [])})
         for item in formulae_list:
             item["category"] = categorize_item(item)
+            u = size_map.get(item.get("name"))
+            if u:
+                item["size_kb"] = u.get("kilobytes")
+                item["size"] = u.get("human")
         for item in casks_list:
             item["category"] = categorize_item(item)
-        return {
-            "formulae": formulae_list,
-            "casks": casks_list,
-        }
+            key = item.get("token") or item.get("name")
+            if isinstance(key, list):
+                key = key[0] if key else None
+            u = size_map.get(key)
+            if u:
+                item["size_kb"] = u.get("kilobytes")
+                item["size"] = u.get("human")
+        return {"formulae": formulae_list, "casks": casks_list}
+
+    def disk_usage(self) -> dict:
+        """Return disk usage for installed formulae and casks."""
+        usage = {"formulae": [], "casks": []}
+        try:
+            names = [n.strip() for n in self.run(["list", "--formula"]).splitlines() if n.strip()]
+            for name in names:
+                path = self.run(["--cellar", name]).strip()
+                if not path:
+                    continue
+                size = dir_size_kb(path)
+                usage["formulae"].append({
+                    "name": name,
+                    "kilobytes": size,
+                    "human": human_size(size),
+                })
+        except BrewError:
+            pass
+        try:
+            caskroom = self.run(["--caskroom"]).strip()
+            names = [n.strip() for n in self.run(["list", "--cask"]).splitlines() if n.strip()]
+            for name in names:
+                path = os.path.join(caskroom, name)
+                if not os.path.exists(path):
+                    continue
+                size = dir_size_kb(path)
+                usage["casks"].append({
+                    "name": name,
+                    "kilobytes": size,
+                    "human": human_size(size),
+                })
+        except BrewError:
+            pass
+        usage["formulae"].sort(key=lambda x: x["kilobytes"], reverse=True)
+        usage["casks"].sort(key=lambda x: x["kilobytes"], reverse=True)
+        return usage
 
     def leaves(self) -> List[str]:
-        output = self.run(["leaves"])  # lists leaf formulae
+        try:
+            output = self.run(["leaves"])  # lists leaf formulae
+        except BrewError:
+            return []
         return [line.strip() for line in output.splitlines() if line.strip()]
 
     def deprecated(self) -> dict:
@@ -440,6 +538,8 @@ class BrewManager:
                         "deprecation_date": item.get("deprecation_date"),
                         "deprecation_reason": item.get("deprecation_reason"),
                         "type": kind,
+                        "size_kb": item.get("size_kb"),
+                        "size": item.get("size"),
                     })
             return deprecated_items
         return {
