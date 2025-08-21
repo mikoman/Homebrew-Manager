@@ -25,7 +25,6 @@
       <button class="tab active" data-tab="packages">Packages</button>
       <button class="tab" data-tab="orphaned">Orphaned</button>
       <button class="tab" data-tab="deprecated">Deprecated</button>
-      <button class="tab" data-tab="disk">Disk Usage</button>
       <button class="tab" data-tab="dependencies">Dependencies</button>
       <button class="tab" data-tab="search">Search</button>
     </nav>
@@ -43,6 +42,12 @@
       <div class="section-header" style="margin-top:18px;">
         <h2>All Installed Packages</h2>
         <div class="section-tools">
+          <select id="installed-order" class="order-filter">
+            <option value="name-asc">Name ▲</option>
+            <option value="name-desc">Name ▼</option>
+            <option value="size-asc">Size ▲</option>
+            <option value="size-desc">Size ▼</option>
+          </select>
           <select id="installed-category" class="category-filter">
             <option value="">All Categories</option>
           </select>
@@ -72,14 +77,6 @@
         </div>
       </div>
       <div id="deprecated-list" class="grid"></div>
-    </section>
-
-    <section id="tab-disk" class="tab-panel">
-      <div class="section-header">
-        <h2>Disk Usage</h2>
-        <div class="hint">Disk space used by installed packages</div>
-      </div>
-      <div id="disk-usage-list" class="grid"></div>
     </section>
 
     <section id="tab-dependencies" class="tab-panel">

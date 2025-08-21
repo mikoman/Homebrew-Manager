@@ -2,7 +2,7 @@ const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 let OUTDATED_SET = new Set();
 let categorySelect = null;
-let DISK_USAGE_LOADED = false;
+let orderSelect = null;
 const BACKUP_CACHE_KEY = 'hbw_backup_cache';
 const BACKUP_CACHE_TIME_KEY = 'hbw_backup_cache_time';
 const BACKUP_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 1 day
@@ -156,10 +156,6 @@ function withButtonLoading(button, fn) {
 function switchTab(name) {
   $$('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   $$('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `tab-${name}`));
-  if (name === 'disk' && !DISK_USAGE_LOADED) {
-    DISK_USAGE_LOADED = true;
-    loadDiskUsage();
-  }
 }
 
 async function api(path, opts = {}) {
@@ -257,7 +253,7 @@ function renderOutdated(data) {
     card.innerHTML = `
       <div class="title"><label><input type="checkbox" data-kind="${item.__type}" data-name="${key}" /> ${display}</label></div>
       ${description ? `<div class="description">${description}</div>` : ''}
-      <div class="subtitle">${item.__type} • Current: ${current || 'n/a'} • Installed: ${installed || 'n/a'}</div>
+      <div class="subtitle">${item.__type} • Current: ${current || 'n/a'} • Installed: ${installed || 'n/a'}${item.size ? ` • ${item.size}` : ''}</div>
       <div class="badges">
         ${item.pinned ? '<span class="badge warn">Pinned</span>' : ''}
         ${item.auto_updates ? '<span class="badge">Auto-updates</span>' : ''}
@@ -330,7 +326,7 @@ function renderDeprecated(data) {
     card.innerHTML = `
       <div class="title">${display}</div>
       ${item.desc ? `<div class="description">${item.desc}</div>` : ''}
-      <div class="subtitle">${item.__type}${item.deprecated ? ' • deprecated' : ''}${item.disabled ? ' • disabled' : ''}</div>
+      <div class="subtitle">${item.__type}${item.deprecated ? ' • deprecated' : ''}${item.disabled ? ' • disabled' : ''}${item.size ? ` • ${item.size}` : ''}</div>
       <div class="badges">
         ${item.deprecation_date ? `<span class="badge warn">Since ${item.deprecation_date}</span>` : ''}
       </div>
@@ -393,6 +389,20 @@ function applyInstalledFilter() {
     const matchesCategory = selectedCategory ? it.category === selectedCategory : true;
     return matchesQuery && matchesCategory;
   });
+  const order = orderSelect?.value || 'name-asc';
+  filtered.sort((a, b) => {
+    switch (order) {
+      case 'name-desc':
+        return getItemDisplayName(b).localeCompare(getItemDisplayName(a));
+      case 'size-asc':
+        return (a.size_kb || 0) - (b.size_kb || 0);
+      case 'size-desc':
+        return (b.size_kb || 0) - (a.size_kb || 0);
+      case 'name-asc':
+      default:
+        return getItemDisplayName(a).localeCompare(getItemDisplayName(b));
+    }
+  });
   if (!filtered.length) {
     root.innerHTML = `<div class="empty">No matches</div>`;
     return;
@@ -408,7 +418,7 @@ function applyInstalledFilter() {
     card.innerHTML = `
       <div class="title">${display}</div>
       ${description ? `<div class="description">${description}</div>` : ''}
-      <div class="subtitle">${item.__type}${version ? ` • ${version}` : ''}</div>
+      <div class="subtitle">${item.__type}${version ? ` • ${version}` : ''}${item.size ? ` • ${item.size}` : ''}</div>
       <div class="controls">
         ${OUTDATED_SET.has(key) ? `<button class="btn small" data-upgrade-one-name="${key}" data-upgrade-one-kind="${item.__type}">Upgrade</button>` : ''}
         <button class="btn small" data-uninstall-name="${key}" data-uninstall-kind="${item.__type}" data-display-name="${display}">Uninstall</button>
@@ -483,48 +493,6 @@ async function loadDeprecated() {
   }
 }
 
-function renderDiskUsage(data) {
-  const root = $('#disk-usage-list');
-  if (!root) return;
-  root.innerHTML = '';
-  const { formulae = [], casks = [] } = data || {};
-  const all = [
-    ...formulae.map(x => ({ ...x, __type: 'formula' })),
-    ...casks.map(x => ({ ...x, __type: 'cask' })),
-  ];
-  if (!all.length) {
-    root.innerHTML = `<div class="empty">No packages found</div>`;
-    return;
-  }
-  all.sort((a, b) => (b.kilobytes || 0) - (a.kilobytes || 0));
-  for (const item of all) {
-    const card = document.createElement('div');
-    card.className = 'card';
-    card.innerHTML = `
-      <div class="title">${item.name}</div>
-      <div class="subtitle">${item.__type} • ${item.human}</div>
-    `;
-    root.appendChild(card);
-  }
-}
-
-async function loadDiskUsage() {
-  const grid = $('#disk-usage-list');
-  if (!grid) return;
-  grid.classList.add('loading');
-  activityAppend('log', 'Calculating disk usage...');
-  try {
-    const usage = await api('/api/disk_usage');
-    renderDiskUsage(usage);
-    activityAppend('log', 'Disk usage loaded');
-  } catch (e) {
-    activityAppend('error', e.message || 'Failed to load disk usage');
-    toast(e.message || 'Failed to load disk usage');
-  } finally {
-    grid.classList.remove('loading');
-  }
-}
-
 async function refreshSummary() {
   activityClear();
   activityAppend('start', 'Loading summary...');
@@ -534,7 +502,6 @@ async function refreshSummary() {
     loadOrphaned(),
     loadDeprecated(),
   ]);
-  DISK_USAGE_LOADED = false;
   requestAnimationFrame(() => {
     activityClear();
     activityAppend('end', 'Loading complete');
@@ -546,7 +513,6 @@ async function refreshPackagesOnly() {
     loadOutdated(),
     loadInstalled(),
   ]);
-  DISK_USAGE_LOADED = false;
 }
 
 async function doUpdate() {
@@ -940,6 +906,7 @@ function initEvents() {
   const installedSearch = $('#installed-search');
   const installedClear = $('#installed-search-clear');
   categorySelect = $('#installed-category');
+  orderSelect = $('#installed-order');
   
   // Show/hide clear buttons based on input content
   function updateClearButton(input, clearBtn) {
@@ -972,6 +939,11 @@ function initEvents() {
   }
   if (categorySelect) {
     categorySelect.addEventListener('change', () => {
+      applyInstalledFilter();
+    });
+  }
+  if (orderSelect) {
+    orderSelect.addEventListener('change', () => {
       applyInstalledFilter();
     });
   }

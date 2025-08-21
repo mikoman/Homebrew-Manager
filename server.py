@@ -400,7 +400,9 @@ class BrewManager:
         formulae = data.get("formulae", [])
         casks = data.get("casks", [])
         
-        # Get descriptions for outdated formulae
+        # Get descriptions and disk usage for outdated formulae
+        usage = self.disk_usage()
+        size_map = {u["name"]: u for u in usage.get("formulae", [])}
         for formula in formulae:
             try:
                 # Get info for each formula individually to be more reliable
@@ -413,8 +415,13 @@ class BrewManager:
             except Exception as e:
                 print(f"Failed to fetch description for formula {formula['name']}: {e}")
                 formula["desc"] = ""
-        
-        # Get descriptions for outdated casks
+            u = size_map.get(formula.get("name"))
+            if u:
+                formula["size_kb"] = u.get("kilobytes")
+                formula["size"] = u.get("human")
+
+        # Get descriptions and disk usage for outdated casks
+        size_map_c = {u["name"]: u for u in usage.get("casks", [])}
         for cask in casks:
             try:
                 # Get info for each cask individually to be more reliable
@@ -427,6 +434,10 @@ class BrewManager:
             except Exception as e:
                 print(f"Failed to fetch description for cask {cask['name']}: {e}")
                 cask["desc"] = ""
+            u = size_map_c.get(cask.get("name"))
+            if u:
+                cask["size_kb"] = u.get("kilobytes")
+                cask["size"] = u.get("human")
         
         return {
             "formulae": formulae,
@@ -438,10 +449,21 @@ class BrewManager:
         casks = self.run(["info", "--json=v2", "--installed", "--cask"], capture_json=True)
         formulae_list = formulae.get("formulae", [])
         casks_list = casks.get("casks", [])
+        usage = self.disk_usage()
+        size_map = {u["name"]: u for u in usage.get("formulae", [])}
+        size_map.update({u["name"]: u for u in usage.get("casks", [])})
         for item in formulae_list:
             item["category"] = categorize_item(item)
+            u = size_map.get(item.get("name"))
+            if u:
+                item["size_kb"] = u.get("kilobytes")
+                item["size"] = u.get("human")
         for item in casks_list:
             item["category"] = categorize_item(item)
+            u = size_map.get(item.get("name"))
+            if u:
+                item["size_kb"] = u.get("kilobytes")
+                item["size"] = u.get("human")
         return {
             "formulae": formulae_list,
             "casks": casks_list,
@@ -507,6 +529,8 @@ class BrewManager:
                         "deprecation_date": item.get("deprecation_date"),
                         "deprecation_reason": item.get("deprecation_reason"),
                         "type": kind,
+                        "size_kb": item.get("size_kb"),
+                        "size": item.get("size"),
                     })
             return deprecated_items
         return {
@@ -987,9 +1011,6 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if path == "/api/installed":
                 self._send_json(brew.installed_info())
-                return
-            if path == "/api/disk_usage":
-                self._send_json(brew.disk_usage())
                 return
             if path == "/api/backup":
                 self._send_json(brew.backup())
