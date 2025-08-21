@@ -81,17 +81,24 @@ body {
 }
 /* Activity panel */
 .activity {
-  position: fixed; 
-  right: 24px; 
-  bottom: 24px; 
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
   width: min(520px, calc(100vw - 48px));
-  max-height: 50vh; 
-  overflow: hidden; 
-  border: 1px solid var(--border); 
+  max-height: 50vh;
+  overflow: hidden;
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--surface);
   backdrop-filter: blur(16px);
   box-shadow: var(--shadow-lg);
+  opacity: 1;
+  transition: opacity 0.3s ease;
+}
+
+.activity.hidden {
+  opacity: 0;
+  pointer-events: none;
 }
 .activity-header { 
   display: flex; 

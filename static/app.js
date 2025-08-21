@@ -196,13 +196,38 @@ async function api(path, opts = {}) {
 }
 
 // Activity log utils
+let activityHideTimer = null;
+const ACTIVITY_HIDE_DELAY = 2000; // auto-hide after 2s of inactivity
+
+function showActivityPanel() {
+  const panel = $('#activity');
+  if (panel) {
+    panel.classList.remove('hidden');
+  }
+}
+
+function scheduleActivityHide() {
+  clearTimeout(activityHideTimer);
+  activityHideTimer = setTimeout(() => {
+    const panel = $('#activity');
+    if (panel) panel.classList.add('hidden');
+  }, ACTIVITY_HIDE_DELAY);
+}
+
 function activityClear() {
   const root = $('#activity-log');
   if (root) root.innerHTML = '';
+  clearTimeout(activityHideTimer);
 }
 function activityAppend(kind, text) {
   const root = $('#activity-log');
   if (!root) return;
+  showActivityPanel();
+  if (kind === 'end' || kind === 'error') {
+    scheduleActivityHide();
+  } else {
+    clearTimeout(activityHideTimer);
+  }
   const line = document.createElement('div');
   line.className = 'activity-line';
   const tag = document.createElement('span');
