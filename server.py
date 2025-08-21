@@ -96,6 +96,37 @@ def categorize_item(item: Dict[str, Union[str, List[str]]]) -> str:
     return DEFAULT_CATEGORY
 
 
+def dir_size_kb(path: str) -> int:
+    """Calculate directory size in kilobytes."""
+    try:
+        result = subprocess.run(["du", "-sk", path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode == 0 and result.stdout:
+            return int(result.stdout.split()[0])
+    except Exception:
+        pass
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            fp = os.path.join(root, f)
+            try:
+                total += os.path.getsize(fp)
+            except OSError:
+                continue
+    return total // 1024
+
+
+def human_size(kb: int) -> str:
+    """Convert kilobytes to human readable string."""
+    units = ["KB", "MB", "GB", "TB", "PB"]
+    size = float(kb)
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            if unit == "KB":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024
+
+
 def find_brew_path() -> str:
     # Try PATH first
     path = shutil.which("brew")
@@ -415,6 +446,42 @@ class BrewManager:
             "formulae": formulae_list,
             "casks": casks_list,
         }
+
+    def disk_usage(self) -> dict:
+        """Return disk usage for installed formulae and casks."""
+        usage = {"formulae": [], "casks": []}
+        try:
+            names = [n.strip() for n in self.run(["list", "--formula"]).splitlines() if n.strip()]
+            for name in names:
+                path = self.run(["--cellar", name]).strip()
+                if not path:
+                    continue
+                size = dir_size_kb(path)
+                usage["formulae"].append({
+                    "name": name,
+                    "kilobytes": size,
+                    "human": human_size(size),
+                })
+        except BrewError:
+            pass
+        try:
+            caskroom = self.run(["--caskroom"]).strip()
+            names = [n.strip() for n in self.run(["list", "--cask"]).splitlines() if n.strip()]
+            for name in names:
+                path = os.path.join(caskroom, name)
+                if not os.path.exists(path):
+                    continue
+                size = dir_size_kb(path)
+                usage["casks"].append({
+                    "name": name,
+                    "kilobytes": size,
+                    "human": human_size(size),
+                })
+        except BrewError:
+            pass
+        usage["formulae"].sort(key=lambda x: x["kilobytes"], reverse=True)
+        usage["casks"].sort(key=lambda x: x["kilobytes"], reverse=True)
+        return usage
 
     def leaves(self) -> List[str]:
         output = self.run(["leaves"])  # lists leaf formulae
@@ -920,6 +987,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             if path == "/api/installed":
                 self._send_json(brew.installed_info())
+                return
+            if path == "/api/disk_usage":
+                self._send_json(brew.disk_usage())
                 return
             if path == "/api/backup":
                 self._send_json(brew.backup())

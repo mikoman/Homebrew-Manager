@@ -2,6 +2,7 @@ const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 let OUTDATED_SET = new Set();
 let categorySelect = null;
+let DISK_USAGE_LOADED = false;
 const BACKUP_CACHE_KEY = 'hbw_backup_cache';
 const BACKUP_CACHE_TIME_KEY = 'hbw_backup_cache_time';
 const BACKUP_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 1 day
@@ -155,6 +156,10 @@ function withButtonLoading(button, fn) {
 function switchTab(name) {
   $$('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   $$('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `tab-${name}`));
+  if (name === 'disk' && !DISK_USAGE_LOADED) {
+    DISK_USAGE_LOADED = true;
+    loadDiskUsage();
+  }
 }
 
 async function api(path, opts = {}) {
@@ -478,6 +483,48 @@ async function loadDeprecated() {
   }
 }
 
+function renderDiskUsage(data) {
+  const root = $('#disk-usage-list');
+  if (!root) return;
+  root.innerHTML = '';
+  const { formulae = [], casks = [] } = data || {};
+  const all = [
+    ...formulae.map(x => ({ ...x, __type: 'formula' })),
+    ...casks.map(x => ({ ...x, __type: 'cask' })),
+  ];
+  if (!all.length) {
+    root.innerHTML = `<div class="empty">No packages found</div>`;
+    return;
+  }
+  all.sort((a, b) => (b.kilobytes || 0) - (a.kilobytes || 0));
+  for (const item of all) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <div class="title">${item.name}</div>
+      <div class="subtitle">${item.__type} • ${item.human}</div>
+    `;
+    root.appendChild(card);
+  }
+}
+
+async function loadDiskUsage() {
+  const grid = $('#disk-usage-list');
+  if (!grid) return;
+  grid.classList.add('loading');
+  activityAppend('log', 'Calculating disk usage...');
+  try {
+    const usage = await api('/api/disk_usage');
+    renderDiskUsage(usage);
+    activityAppend('log', 'Disk usage loaded');
+  } catch (e) {
+    activityAppend('error', e.message || 'Failed to load disk usage');
+    toast(e.message || 'Failed to load disk usage');
+  } finally {
+    grid.classList.remove('loading');
+  }
+}
+
 async function refreshSummary() {
   activityClear();
   activityAppend('start', 'Loading summary...');
@@ -487,6 +534,7 @@ async function refreshSummary() {
     loadOrphaned(),
     loadDeprecated(),
   ]);
+  DISK_USAGE_LOADED = false;
   requestAnimationFrame(() => {
     activityClear();
     activityAppend('end', 'Loading complete');
@@ -498,6 +546,7 @@ async function refreshPackagesOnly() {
     loadOutdated(),
     loadInstalled(),
   ]);
+  DISK_USAGE_LOADED = false;
 }
 
 async function doUpdate() {
