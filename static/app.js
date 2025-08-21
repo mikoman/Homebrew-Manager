@@ -6,10 +6,32 @@ let orderSelect = null;
 const BACKUP_CACHE_KEY = 'hbw_backup_cache';
 const BACKUP_CACHE_TIME_KEY = 'hbw_backup_cache_time';
 const BACKUP_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 1 day
+const INSTALLED_CACHE_KEY = 'hbw_installed_cache';
+const OUTDATED_CACHE_KEY = 'hbw_outdated_cache';
+const ORPHANED_CACHE_KEY = 'hbw_orphaned_cache';
+const DEPRECATED_CACHE_KEY = 'hbw_deprecated_cache';
+const CACHE_TIME_SUFFIX = '_time';
+const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 // Debug helper: enable via localStorage.setItem('hbw_debug','1')
 function dbg(...args) {
   try { if (localStorage.getItem('hbw_debug')) console.debug('[HBW]', ...args); } catch {}
+}
+
+function readCache(key) {
+  try {
+    const data = localStorage.getItem(key);
+    const ts = Number(localStorage.getItem(key + CACHE_TIME_SUFFIX) || 0);
+    if (data && (Date.now() - ts) < CACHE_MAX_AGE_MS) return JSON.parse(data);
+  } catch {}
+  return null;
+}
+
+function writeCache(key, data) {
+  try {
+    localStorage.setItem(key, JSON.stringify(data));
+    localStorage.setItem(key + CACHE_TIME_SUFFIX, String(Date.now()));
+  } catch {}
 }
 
 // Helpers for robust name/description handling (casks sometimes use arrays)
@@ -159,7 +181,12 @@ function switchTab(name) {
 }
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  let res;
+  try {
+    res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  } catch {
+    throw new Error('Server not reachable');
+  }
   if (!res.ok) {
     let msg = 'Request failed';
     try { const data = await res.json(); msg = data.error || msg; } catch {}
@@ -431,15 +458,22 @@ function applyInstalledFilter() {
 
 async function loadOutdated() {
   const grid = $('#outdated-list');
-  grid.classList.add('loading');
+  const cached = readCache(OUTDATED_CACHE_KEY);
+  if (cached) renderOutdated(cached);
+  if (!cached) grid.classList.add('loading');
   activityAppend('log', 'Fetching outdated...');
   try {
     const outdated = await api('/api/outdated');
     renderOutdated(outdated);
+    writeCache(OUTDATED_CACHE_KEY, outdated);
     activityAppend('log', 'Outdated loaded');
   } catch (e) {
-    activityAppend('error', e.message || 'Failed to load outdated');
-    toast(e.message || 'Failed to load outdated');
+    if (cached) {
+      activityAppend('warn', e.message || 'Using cached outdated data');
+    } else {
+      activityAppend('error', e.message || 'Failed to load outdated');
+      toast(e.message || 'Failed to load outdated');
+    }
   } finally {
     grid.classList.remove('loading');
   }
@@ -447,15 +481,22 @@ async function loadOutdated() {
 
 async function loadInstalled() {
   const grid = $('#installed-list');
-  grid.classList.add('loading');
+  const cached = readCache(INSTALLED_CACHE_KEY);
+  if (cached) renderInstalled(cached);
+  if (!cached) grid.classList.add('loading');
   activityAppend('log', 'Fetching installed...');
   try {
     const installed = await api('/api/installed');
     renderInstalled(installed);
+    writeCache(INSTALLED_CACHE_KEY, installed);
     activityAppend('log', 'Installed loaded');
   } catch (e) {
-    activityAppend('error', e.message || 'Failed to load installed');
-    toast(e.message || 'Failed to load installed');
+    if (cached) {
+      activityAppend('warn', e.message || 'Using cached installed data');
+    } else {
+      activityAppend('error', e.message || 'Failed to load installed');
+      toast(e.message || 'Failed to load installed');
+    }
   } finally {
     grid.classList.remove('loading');
   }
@@ -463,15 +504,22 @@ async function loadInstalled() {
 
 async function loadOrphaned() {
   const grid = $('#orphaned-list');
-  grid.classList.add('loading');
+  const cached = readCache(ORPHANED_CACHE_KEY);
+  if (cached) renderOrphaned(cached);
+  if (!cached) grid.classList.add('loading');
   activityAppend('log', 'Fetching orphaned...');
   try {
     const orphaned = await api('/api/orphaned');
     renderOrphaned(orphaned);
+    writeCache(ORPHANED_CACHE_KEY, orphaned);
     activityAppend('log', 'Orphaned loaded');
   } catch (e) {
-    activityAppend('error', e.message || 'Failed to load orphaned');
-    toast(e.message || 'Failed to load orphaned');
+    if (cached) {
+      activityAppend('warn', e.message || 'Using cached orphaned data');
+    } else {
+      activityAppend('error', e.message || 'Failed to load orphaned');
+      toast(e.message || 'Failed to load orphaned');
+    }
   } finally {
     grid.classList.remove('loading');
   }
@@ -479,15 +527,22 @@ async function loadOrphaned() {
 
 async function loadDeprecated() {
   const grid = $('#deprecated-list');
-  grid.classList.add('loading');
+  const cached = readCache(DEPRECATED_CACHE_KEY);
+  if (cached) renderDeprecated(cached);
+  if (!cached) grid.classList.add('loading');
   activityAppend('log', 'Fetching deprecated...');
   try {
     const deprecated = await api('/api/deprecated');
     renderDeprecated(deprecated);
+    writeCache(DEPRECATED_CACHE_KEY, deprecated);
     activityAppend('log', 'Deprecated loaded');
   } catch (e) {
-    activityAppend('error', e.message || 'Failed to load deprecated');
-    toast(e.message || 'Failed to load deprecated');
+    if (cached) {
+      activityAppend('warn', e.message || 'Using cached deprecated data');
+    } else {
+      activityAppend('error', e.message || 'Failed to load deprecated');
+      toast(e.message || 'Failed to load deprecated');
+    }
   } finally {
     grid.classList.remove('loading');
   }

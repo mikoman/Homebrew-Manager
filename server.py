@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import logging
 import os
 import posixpath
 import re
@@ -11,12 +12,44 @@ from typing import Dict, List, Optional, Union
 import time
 import pty
 import select
+from logging.handlers import RotatingFileHandler
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, urlparse
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(PROJECT_ROOT, "static")
+
+# Logging setup
+LOG_PATH = os.path.join(PROJECT_ROOT, "homebrew_manager.log")
+logger = logging.getLogger("homebrew_manager")
+if not logger.handlers:
+    logger.setLevel(logging.INFO)
+    _handler = RotatingFileHandler(LOG_PATH, maxBytes=1_000_000, backupCount=3)
+    _handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logger.addHandler(_handler)
+
+# Cache directory for offline data
+CACHE_DIR = os.path.join(PROJECT_ROOT, ".cache")
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+
+def _read_cache(name: str) -> Optional[dict]:
+    path = os.path.join(CACHE_DIR, f"{name}.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _write_cache(name: str, data: dict) -> None:
+    path = os.path.join(CACHE_DIR, f"{name}.json")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception:
+        logger.exception("Failed to write cache %s", name)
 
 
 # Basic keyword-based categories for packages
@@ -174,6 +207,7 @@ class BrewManager:
         env = os.environ.copy()
         env.setdefault("LC_ALL", "C.UTF-8")
         env.setdefault("LANG", "C.UTF-8")
+        logger.debug("brew %s", " ".join(args))
         try:
             # Some brew commands mutate shared state; serialize to avoid overlapping runs
             with self.lock:
@@ -208,8 +242,10 @@ class BrewManager:
                         text=True,
                     )
         except FileNotFoundError as e:
+            logger.error("Homebrew not found: %s", e)
             raise BrewError("Homebrew not found. Please install Homebrew from https://brew.sh") from e
         except subprocess.TimeoutExpired as e:
+            logger.error("Command timed out: %s", " ".join(cmd))
             raise BrewError(f"Command timed out: {' '.join(cmd)}") from e
 
         if result.returncode != 0:
@@ -260,6 +296,7 @@ class BrewManager:
             else:
                 enhanced_message = combined_output or f"Command failed: {' '.join(cmd)}"
             
+            logger.error("Brew command failed: %s", enhanced_message)
             raise BrewError(enhanced_message, needs_sudo=needs_sudo, permission_issue=permission_issue)
 
         output = result.stdout
@@ -267,7 +304,9 @@ class BrewManager:
             try:
                 return json.loads(output)
             except json.JSONDecodeError:
+                logger.error("Failed to parse JSON output from brew: %s", output[:200])
                 raise BrewError("Failed to parse JSON output from brew")
+        logger.debug("brew command succeeded: %s", " ".join(args))
         return output
 
     def validate_sudo(self, password: str) -> None:
@@ -406,12 +445,20 @@ class BrewManager:
 
     # Data fetchers
     def outdated(self) -> dict:
-        data = self.run(["outdated", "--greedy", "--json=v2"], capture_json=True)
-        
+        cache_name = "outdated"
+        try:
+            data = self.run(["outdated", "--greedy", "--json=v2"], capture_json=True)
+        except BrewError as e:
+            cached = _read_cache(cache_name)
+            if cached is not None:
+                logger.warning("Using cached outdated data: %s", e)
+                return cached
+            raise
+
         # Enhance with descriptions by getting info for each outdated package
         formulae = data.get("formulae", [])
         casks = data.get("casks", [])
-        
+
         # Get descriptions and disk usage for outdated formulae
         usage = self.disk_usage()
         size_map = {u["name"]: u for u in usage.get("formulae", [])}
@@ -425,7 +472,7 @@ class BrewManager:
                 else:
                     formula["desc"] = ""
             except Exception as e:
-                print(f"Failed to fetch description for formula {formula['name']}: {e}")
+                logger.debug("Failed to fetch description for formula %s: %s", formula['name'], e)
                 formula["desc"] = ""
             u = size_map.get(formula.get("name"))
             if u:
@@ -444,29 +491,33 @@ class BrewManager:
                 else:
                     cask["desc"] = ""
             except Exception as e:
-                print(f"Failed to fetch description for cask {cask['name']}: {e}")
+                logger.debug("Failed to fetch description for cask %s: %s", cask['name'], e)
                 cask["desc"] = ""
             u = size_map_c.get(cask.get("name"))
             if u:
                 cask["size_kb"] = u.get("kilobytes")
                 cask["size"] = u.get("human")
-        
-        return {
-            "formulae": formulae,
-            "casks": casks,
-        }
+
+        result = {"formulae": formulae, "casks": casks}
+        _write_cache(cache_name, result)
+        return result
 
     def installed_info(self) -> dict:
+        cache_name = "installed"
         if self._installed_cache and self._cache_valid(self._installed_cache_time):
             return self._installed_cache
         try:
             formulae = self.run(["info", "--json=v2", "--installed", "--formula"], capture_json=True)
-        except BrewError:
-            formulae = {"formulae": []}
-        try:
             casks = self.run(["info", "--json=v2", "--installed", "--cask"], capture_json=True)
-        except BrewError:
-            casks = {"casks": []}
+        except BrewError as e:
+            cached = _read_cache(cache_name)
+            if cached is not None:
+                logger.warning("Using cached installed info: %s", e)
+                self._installed_cache = cached
+                self._installed_cache_time = time.time()
+                return cached
+            raise
+
         formulae_list = formulae.get("formulae", [])
         casks_list = casks.get("casks", [])
         usage = self.disk_usage()
@@ -490,6 +541,7 @@ class BrewManager:
         result = {"formulae": formulae_list, "casks": casks_list}
         self._installed_cache = result
         self._installed_cache_time = time.time()
+        _write_cache(cache_name, result)
         return result
 
     def disk_usage(self) -> dict:
@@ -529,11 +581,18 @@ class BrewManager:
         return usage
 
     def leaves(self) -> List[str]:
+        cache_name = "leaves"
         try:
             output = self.run(["leaves"])  # lists leaf formulae
-        except BrewError:
-            return []
-        return [line.strip() for line in output.splitlines() if line.strip()]
+            result = [line.strip() for line in output.splitlines() if line.strip()]
+            _write_cache(cache_name, result)
+            return result
+        except BrewError as e:
+            cached = _read_cache(cache_name)
+            if cached is not None:
+                logger.warning("Using cached leaves: %s", e)
+                return cached
+        return []
 
     def deprecated(self) -> dict:
         info = self.installed_info()
@@ -565,9 +624,18 @@ class BrewManager:
         }
 
     def orphaned(self) -> dict:
-        # Orphaned = leaves that were installed as dependency, not on request
-        leaves = set(self.leaves())
-        installed = self.installed_info().get("formulae", [])
+        cache_name = "orphaned"
+        try:
+            # Orphaned = leaves that were installed as dependency, not on request
+            leaves = set(self.leaves())
+            installed = self.installed_info().get("formulae", [])
+        except BrewError as e:
+            cached = _read_cache(cache_name)
+            if cached is not None:
+                logger.warning("Using cached orphaned data: %s", e)
+                return cached
+            raise
+
         orphaned_list = []
         for item in installed:
             name = item.get("name")
@@ -593,7 +661,9 @@ class BrewManager:
                     "versions": item.get("versions"),
                     "type": "formula",
                 })
-        return {"formulae": orphaned_list, "casks": []}
+        result = {"formulae": orphaned_list, "casks": []}
+        _write_cache(cache_name, result)
+        return result
 
     def dependency_tree(self, name: str, kind: str = "formula") -> dict:
         """Return dependency tree for a given package."""
@@ -823,12 +893,14 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        logger.info("GET %s", self.path)
         if self.path.startswith("/api/"):
             self._handle_api_get()
         else:
             super().do_GET()
 
     def do_POST(self):
+        logger.info("POST %s", self.path)
         if self.path.startswith("/api/"):
             self._handle_api_post()
         else:
@@ -1086,6 +1158,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             self.send_error(404, "Unknown API endpoint")
         except BrewError as e:
+            logger.error("API GET %s failed: %s", path, e)
             error_response = {
                 "ok": False,
                 "error": str(e),
@@ -1094,6 +1167,7 @@ class Handler(SimpleHTTPRequestHandler):
             }
             self._send_json(error_response, 500)
         except Exception as e:
+            logger.exception("Unexpected error handling GET %s", path)
             self._send_json({"ok": False, "error": f"Unexpected error: {e}"}, 500)
 
     def _handle_api_post(self):
@@ -1154,6 +1228,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             self.send_error(404, "Unknown API endpoint")
         except BrewError as e:
+            logger.error("API POST %s failed: %s", path, e)
             error_response = {
                 "ok": False,
                 "error": str(e),
@@ -1162,11 +1237,13 @@ class Handler(SimpleHTTPRequestHandler):
             }
             self._send_json(error_response, 500)
         except Exception as e:
+            logger.exception("Unexpected error handling POST %s", path)
             self._send_json({"ok": False, "error": f"Unexpected error: {e}"}, 500)
 
 
 def run(server_class=HTTPServer, handler_class=Handler, port: int = 8765):
     os.chdir(PROJECT_ROOT)
+    logger.info("Starting server on port %s", port)
     class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
         daemon_threads = True
         allow_reuse_address = True
@@ -1180,6 +1257,7 @@ def run(server_class=HTTPServer, handler_class=Handler, port: int = 8765):
         pass
     finally:
         httpd.server_close()
+        logger.info("Server on port %s stopped", port)
 
 
 if __name__ == "__main__":
