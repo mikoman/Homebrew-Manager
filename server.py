@@ -152,10 +152,22 @@ class BrewError(Exception):
 
 
 class BrewManager:
-    def __init__(self, timeout_seconds: int = 120):
+    def __init__(self, timeout_seconds: int = 120, cache_ttl: int = 30):
         self.brew_path = find_brew_path()
         self.timeout_seconds = timeout_seconds
         self.lock = threading.Lock()
+        self.cache_ttl = cache_ttl
+        # Simple in-memory caches to avoid repeated brew invocations
+        self._installed_cache: Optional[dict] = None
+        self._installed_cache_time: float = 0.0
+        self._search_cache: Dict[str, tuple] = {}
+
+    def _cache_valid(self, ts: float) -> bool:
+        return (time.time() - ts) < self.cache_ttl
+
+    def invalidate_caches(self) -> None:
+        self._installed_cache = None
+        self._search_cache.clear()
 
     def run(self, args, capture_json: bool = False, sudo_password: str = None) -> Union[dict, str]:
         cmd = [self.brew_path] + args
@@ -445,6 +457,8 @@ class BrewManager:
         }
 
     def installed_info(self) -> dict:
+        if self._installed_cache and self._cache_valid(self._installed_cache_time):
+            return self._installed_cache
         try:
             formulae = self.run(["info", "--json=v2", "--installed", "--formula"], capture_json=True)
         except BrewError:
@@ -473,7 +487,10 @@ class BrewManager:
             if u:
                 item["size_kb"] = u.get("kilobytes")
                 item["size"] = u.get("human")
-        return {"formulae": formulae_list, "casks": casks_list}
+        result = {"formulae": formulae_list, "casks": casks_list}
+        self._installed_cache = result
+        self._installed_cache_time = time.time()
+        return result
 
     def disk_usage(self) -> dict:
         """Return disk usage for installed formulae and casks."""
@@ -629,7 +646,9 @@ class BrewManager:
 
     def update(self) -> str:
         # Update brew metadata
-        return self.run(["update"])  # textual output
+        result = self.run(["update"])  # textual output
+        self.invalidate_caches()
+        return result
 
     def upgrade(self, formulae: Optional[List[str]] = None, casks: Optional[List[str]] = None, sudo_password: Optional[str] = None) -> dict:
         logs: Dict[str, str] = {}
@@ -642,6 +661,7 @@ class BrewManager:
             logs["casks"] = self.run(["upgrade", "--cask", *casks])
         if not formulae and not casks:
             logs["all"] = self.run(["upgrade"])  # upgrade everything outdated
+        self.invalidate_caches()
         return logs
 
     def backup(self) -> dict:
@@ -660,10 +680,14 @@ class BrewManager:
             logs["formulae"] = self.run(["install", *formulae], sudo_password=sudo_password)
         if casks:
             logs["casks"] = self.run(["install", "--cask", *casks], sudo_password=sudo_password)
+        self.invalidate_caches()
         return logs
 
     def search(self, query: str) -> dict:
         """Search for formulae and casks using flexible token matching.
+
+        Results are cached briefly to avoid repeated ``brew`` invocations
+        while a user refines their query.
 
         Homebrew's ``brew search`` requires fairly exact strings and exits with
         a non-zero status when nothing is found.  To provide a better UX we:
@@ -673,6 +697,11 @@ class BrewManager:
           results, enabling searches like "tencent lemon"
         * Fall back to a hyphen-joined version of the query
         """
+
+        cache_key = query.strip().lower()
+        cached = self._search_cache.get(cache_key)
+        if cached and self._cache_valid(cached[0]):
+            return cached[1]
 
         def parse_list(text: str) -> list:
             items = []
@@ -713,47 +742,46 @@ class BrewManager:
             casks = safe_search("cask", hyphen_query)
         
         # Enhance with descriptions (limit to first 20 results for performance)
-        enhanced_formulae = []
-        for name in formulae[:20]:
+        def bulk_info(names: List[str], kind: str) -> Dict[str, str]:
+            if not names:
+                return {}
             try:
-                info = self.run(["info", "--json=v2", "--formula", name], capture_json=True)
-                formula_info = info.get("formulae", [])
-                if formula_info:
-                    enhanced_formulae.append({
-                        "name": name,
-                        "desc": formula_info[0].get("desc", "")
-                    })
-                else:
-                    enhanced_formulae.append({"name": name, "desc": ""})
-            except:
-                enhanced_formulae.append({"name": name, "desc": ""})
-        
-        enhanced_casks = []
-        for name in casks[:20]:
-            try:
-                info = self.run(["info", "--json=v2", "--cask", name], capture_json=True)
-                cask_info = info.get("casks", [])
-                if cask_info:
-                    enhanced_casks.append({
-                        "name": name,
-                        "desc": cask_info[0].get("desc", "")
-                    })
-                else:
-                    enhanced_casks.append({"name": name, "desc": ""})
-            except:
-                enhanced_casks.append({"name": name, "desc": ""})
-        
-        return {"formulae": enhanced_formulae, "casks": enhanced_casks}
+                data = self.run(["info", "--json=v2", f"--{kind}", *names], capture_json=True)
+                key = "formulae" if kind == "formula" else "casks"
+                desc_map = {}
+                for item in data.get(key, []):
+                    name_key = item.get("name") if kind == "formula" else item.get("token") or item.get("name")
+                    desc_map[name_key] = item.get("desc", "")
+                return desc_map
+            except BrewError:
+                return {n: "" for n in names}
+
+        f_names = formulae[:20]
+        c_names = casks[:20]
+        f_desc = bulk_info(f_names, "formula")
+        c_desc = bulk_info(c_names, "cask")
+        enhanced_formulae = [{"name": n, "desc": f_desc.get(n, "")} for n in f_names]
+        enhanced_casks = [{"name": n, "desc": c_desc.get(n, "")} for n in c_names]
+
+        result = {"formulae": enhanced_formulae, "casks": enhanced_casks}
+        self._search_cache[cache_key] = (time.time(), result)
+        return result
 
     def install(self, name: str, kind: str) -> str:
         if kind == "cask":
-            return self.run(["install", "--cask", name])
-        return self.run(["install", name])
+            result = self.run(["install", "--cask", name])
+        else:
+            result = self.run(["install", name])
+        self.invalidate_caches()
+        return result
 
     def uninstall(self, name: str, kind: str) -> str:
         if kind == "cask":
-            return self.run(["uninstall", "--cask", name])
-        return self.run(["uninstall", name])
+            result = self.run(["uninstall", "--cask", name])
+        else:
+            result = self.run(["uninstall", name])
+        self.invalidate_caches()
+        return result
 
     def info(self, name: str, kind: str) -> dict:
         if kind == "cask":
