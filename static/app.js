@@ -196,13 +196,31 @@ async function api(path, opts = {}) {
 }
 
 // Activity log utils
+let activityHideTimer = null;
+const ACTIVITY_HIDE_DELAY = 4000; // auto-hide after 4s of inactivity
+
+function showActivityPanel() {
+  const panel = $('#activity');
+  if (panel) panel.classList.remove('hidden');
+}
+
+function scheduleActivityHide() {
+  clearTimeout(activityHideTimer);
+  activityHideTimer = setTimeout(() => {
+    const panel = $('#activity');
+    if (panel) panel.classList.add('hidden');
+  }, ACTIVITY_HIDE_DELAY);
+}
+
 function activityClear() {
   const root = $('#activity-log');
   if (root) root.innerHTML = '';
+  scheduleActivityHide();
 }
 function activityAppend(kind, text) {
   const root = $('#activity-log');
   if (!root) return;
+  showActivityPanel();
   const line = document.createElement('div');
   line.className = 'activity-line';
   const tag = document.createElement('span');
@@ -215,6 +233,7 @@ function activityAppend(kind, text) {
   line.appendChild(content);
   root.appendChild(line);
   root.scrollTop = root.scrollHeight;
+  scheduleActivityHide();
 }
 function streamSSE(url, { onStart, onLog, onEnd, onError } = {}) {
   const es = new EventSource(url);
