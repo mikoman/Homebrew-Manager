@@ -445,8 +445,14 @@ class BrewManager:
         }
 
     def installed_info(self) -> dict:
-        formulae = self.run(["info", "--json=v2", "--installed", "--formula"], capture_json=True)
-        casks = self.run(["info", "--json=v2", "--installed", "--cask"], capture_json=True)
+        try:
+            formulae = self.run(["info", "--json=v2", "--installed", "--formula"], capture_json=True)
+        except BrewError:
+            formulae = {"formulae": []}
+        try:
+            casks = self.run(["info", "--json=v2", "--installed", "--cask"], capture_json=True)
+        except BrewError:
+            casks = {"casks": []}
         formulae_list = formulae.get("formulae", [])
         casks_list = casks.get("casks", [])
         usage = self.disk_usage()
@@ -464,10 +470,7 @@ class BrewManager:
             if u:
                 item["size_kb"] = u.get("kilobytes")
                 item["size"] = u.get("human")
-        return {
-            "formulae": formulae_list,
-            "casks": casks_list,
-        }
+        return {"formulae": formulae_list, "casks": casks_list}
 
     def disk_usage(self) -> dict:
         """Return disk usage for installed formulae and casks."""
@@ -506,7 +509,10 @@ class BrewManager:
         return usage
 
     def leaves(self) -> List[str]:
-        output = self.run(["leaves"])  # lists leaf formulae
+        try:
+            output = self.run(["leaves"])  # lists leaf formulae
+        except BrewError:
+            return []
         return [line.strip() for line in output.splitlines() if line.strip()]
 
     def deprecated(self) -> dict:
