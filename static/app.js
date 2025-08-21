@@ -197,11 +197,14 @@ async function api(path, opts = {}) {
 
 // Activity log utils
 let activityHideTimer = null;
-const ACTIVITY_HIDE_DELAY = 4000; // auto-hide after 4s of inactivity
+const ACTIVITY_HIDE_DELAY = 2000; // auto-hide after 2s of inactivity
 
 function showActivityPanel() {
   const panel = $('#activity');
-  if (panel) panel.classList.remove('hidden');
+  if (panel) {
+    panel.classList.remove('hidden');
+    scheduleActivityHide();
+  }
 }
 
 function scheduleActivityHide() {
@@ -233,7 +236,6 @@ function activityAppend(kind, text) {
   line.appendChild(content);
   root.appendChild(line);
   root.scrollTop = root.scrollHeight;
-  scheduleActivityHide();
 }
 function streamSSE(url, { onStart, onLog, onEnd, onError } = {}) {
   const es = new EventSource(url);
