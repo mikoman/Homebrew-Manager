@@ -1,6 +1,7 @@
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 let OUTDATED_SET = new Set();
+let categorySelect = null;
 const BACKUP_CACHE_KEY = 'hbw_backup_cache';
 const BACKUP_CACHE_TIME_KEY = 'hbw_backup_cache_time';
 const BACKUP_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 1 day
@@ -360,12 +361,12 @@ function renderInstalled(data) {
 
   // Populate categories dropdown
   const categories = Array.from(new Set(all.map(x => x.category).filter(Boolean))).sort();
-  if (select) {
-    const current = select.value;
-    select.innerHTML = '<option value="">All Categories</option>' +
+  if (categorySelect) {
+    const current = categorySelect.value;
+    categorySelect.innerHTML = '<option value="">All Categories</option>' +
       categories.map(c => `<option value="${c}">${c.charAt(0).toUpperCase() + c.slice(1)}</option>`).join('');
     if (current && categories.includes(current)) {
-      select.value = current;
+      categorySelect.value = current;
     }
   }
 
@@ -374,7 +375,7 @@ function renderInstalled(data) {
 
 function applyInstalledFilter() {
   const q = ($('#installed-search')?.value || '').trim().toLowerCase();
-  const selectedCategory = $('#installed-category')?.value || '';
+  const selectedCategory = categorySelect?.value || '';
   const items = window.__INSTALLED_CACHE__ || [];
   const root = $('#installed-list');
   if (!root) return;
@@ -889,7 +890,7 @@ function initEvents() {
   const searchClear = $('#search-input-clear');
   const installedSearch = $('#installed-search');
   const installedClear = $('#installed-search-clear');
-  const installedCategory = $('#installed-category');
+  categorySelect = $('#installed-category');
   
   // Show/hide clear buttons based on input content
   function updateClearButton(input, clearBtn) {
@@ -920,8 +921,8 @@ function initEvents() {
       installedSearch.focus();
     });
   }
-  if (installedCategory) {
-    installedCategory.addEventListener('change', () => {
+  if (categorySelect) {
+    categorySelect.addEventListener('change', () => {
       applyInstalledFilter();
     });
   }
