@@ -11,6 +11,8 @@ from typing import Dict, List, Optional, Union
 import time
 import pty
 import select
+import fcntl
+import termios
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, urlparse
@@ -184,9 +186,10 @@ class BrewManager:
         with self.lock:
             try:
                 # Always allocate a PTY so that any sudo prompts go to the PTY, not the server terminal
-                if sudo_password:
-                    self.validate_sudo(sudo_password)
                 master_fd, slave_fd = pty.openpty()
+                def _preexec():
+                    os.setsid()
+                    fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
                 proc = subprocess.Popen(
                     cmd,
                     env=env,
@@ -195,7 +198,9 @@ class BrewManager:
                     stderr=slave_fd,
                     bufsize=0,
                     close_fds=True,
+                    preexec_fn=_preexec,
                 )
+                os.close(slave_fd)
                 # We will read from master_fd below
             except FileNotFoundError as e:
                 raise BrewError("Homebrew not found. Please install Homebrew from https://brew.sh") from e
@@ -204,6 +209,7 @@ class BrewManager:
             try:
                 # Read bytes from PTY master and decode incrementally
                 buffer = ""
+                password_sent = False
                 while True:
                     r, _, _ = select.select([master_fd], [], [], 0.1)
                     if master_fd in r:
@@ -215,7 +221,12 @@ class BrewManager:
                             if proc.poll() is not None:
                                 break
                             continue
-                        buffer += chunk.decode("utf-8", errors="replace")
+                        text = buffer + chunk.decode("utf-8", errors="replace")
+                        if sudo_password and not password_sent and re.search(r"password", text, re.IGNORECASE):
+                            os.write(master_fd, (sudo_password + "\n").encode())
+                            password_sent = True
+                            text = re.sub(r".*password[^\n]*\n?", "", text, flags=re.IGNORECASE)
+                        buffer = text
                         while "\n" in buffer:
                             line, buffer = buffer.split("\n", 1)
                             line_clean = line.rstrip("\r")
@@ -234,7 +245,6 @@ class BrewManager:
                 proc.wait()
                 try:
                     os.close(master_fd)
-                    os.close(slave_fd)
                 except Exception:
                     pass
             if proc.returncode != 0:

@@ -165,8 +165,8 @@ The application has four main tabs:
 Some operations require administrator privileges:
 
 1. **Automatic Detection**: The app detects when sudo is needed
-2. **Current Workaround**: When sudo is required, enter your password in the terminal where you launched the application
-3. **Future Enhancement**: In-app sudo password handling is planned (see TODO section)
+2. **In-app Authentication**: When a command needs elevation, the browser prompts for your password and securely reuses it for the session
+3. **No Terminal Switching**: You no longer need to enter your password in the server terminal
 
 ### Activity Panel
 
@@ -286,7 +286,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - [ ] **Package Categories**: Organize packages by category (development, utilities, etc.)
 - [ ] **Export/Import**: Export package lists and import them on other systems
 - [ ] **Backup/Restore**: Create backups of current package state
-- [ ] **Sudo Password Integration**: Fix in-app sudo password handling for seamless administrative operations
+- [x] **Sudo Password Integration**: Fix in-app sudo password handling for seamless administrative operations
 
 ### Medium Priority
 - [ ] **Custom Taps Support**: Manage custom Homebrew taps

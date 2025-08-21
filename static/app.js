@@ -194,6 +194,133 @@ function streamSSE(url, { onStart, onLog, onEnd, onError } = {}) {
   return close;
 }
 
+async function upgradePackages(formulae, casks, displayName) {
+  const params = new URLSearchParams();
+  for (const f of formulae) params.append('formulae', f);
+  for (const c of casks) params.append('casks', c);
+  const url = `/api/upgrade_stream${params.toString() ? ('?' + params.toString()) : ''}`;
+
+  const runWithPassword = async (password) => {
+    activityClear();
+    activityAppend('start', 'Starting upgrade...');
+    const response = await fetch('/api/upgrade_stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ formulae, casks, sudo_password: password })
+    });
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let currentEvent = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('event: ')) { currentEvent = line.slice(7); continue; }
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6);
+          if (currentEvent === 'start') activityAppend('start', data);
+          else if (currentEvent === 'log') activityAppend('log', data);
+          else if (currentEvent === 'end') {
+            requestAnimationFrame(() => {
+              activityClear();
+              activityAppend('end', 'Upgrade complete');
+            });
+            toast('Upgrade complete');
+            await refreshPackagesOnly();
+            return true;
+          } else if (currentEvent === 'error') {
+            activityAppend('error', data);
+            toast('Upgrade failed');
+            return false;
+          }
+        }
+      }
+    }
+    return false;
+  };
+
+  if (window.__SUDO_PWD__) {
+    const ok = await runWithPassword(window.__SUDO_PWD__);
+    if (!ok) {
+      try {
+        const pwd = await showPasswordDialog('upgrade', displayName);
+        if (pwd) {
+          window.__SUDO_PWD__ = pwd;
+          await runWithPassword(pwd);
+        }
+      } catch (e) {
+        if (e.message !== 'User cancelled') {
+          activityAppend('error', 'Authentication failed');
+          toast('Authentication failed');
+        }
+      }
+    }
+    return;
+  }
+
+  activityClear();
+  activityAppend('start', 'Starting upgrade...');
+  return new Promise((resolve) => {
+    streamSSE(url, {
+      onStart: (m) => activityAppend('start', m),
+      onLog: (m) => activityAppend('log', m),
+      onEnd: async () => {
+        requestAnimationFrame(() => {
+          activityClear();
+          activityAppend('end', 'Upgrade complete');
+        });
+        toast('Upgrade complete');
+        await refreshPackagesOnly();
+        resolve();
+      },
+      onError: async (m) => {
+        if (shouldPromptSudo(m)) {
+          try {
+            const pwd = window.__SUDO_PWD__ || await showPasswordDialog('upgrade', displayName);
+            if (pwd) {
+              window.__SUDO_PWD__ = pwd;
+              await runWithPassword(pwd);
+            }
+          } catch (e) {
+            if (e.message !== 'User cancelled') {
+              activityAppend('error', 'Authentication failed');
+              toast('Authentication failed');
+            }
+          }
+          resolve();
+          return;
+        }
+        try {
+          const res = await api('/api/upgrade', { method: 'POST', body: JSON.stringify({ formulae, casks }) });
+          const logs = res?.logs || {};
+          const blocks = [];
+          if (logs.all) blocks.push(logs.all);
+          if (logs.formulae) blocks.push(logs.formulae);
+          if (logs.casks) blocks.push(logs.casks);
+          for (const block of blocks) {
+            const lines = String(block).split(/\r?\n/);
+            for (const line of lines) if (line.trim()) activityAppend('log', line);
+          }
+          requestAnimationFrame(() => {
+            activityClear();
+            activityAppend('end', 'Upgrade complete');
+          });
+          toast('Upgrade complete');
+          await refreshPackagesOnly();
+        } catch (e) {
+          activityAppend('error', m || e.message || 'Upgrade failed');
+          toast(m || e.message || 'Upgrade failed');
+        }
+        resolve();
+      }
+    });
+  });
+}
+
 function renderOutdated(data) {
   const root = $('#outdated-list');
   const header = $('#outdated-header');
@@ -549,115 +676,7 @@ async function doUpgradeSelected() {
     toast('Select packages to upgrade');
     return;
   }
-  activityClear();
-  const params = new URLSearchParams();
-  for (const f of formulae) params.append('formulae', f);
-  for (const c of casks) params.append('casks', c);
-  const url = `/api/upgrade_stream${params.toString() ? ('?' + params.toString()) : ''}`;
-  activityAppend('start', 'Starting upgrade...');
-  return new Promise((resolve) => {
-    streamSSE(url, {
-      onStart: (m) => activityAppend('start', m),
-      onLog: (m) => activityAppend('log', m),
-      onEnd: async () => { 
-        requestAnimationFrame(() => {
-          activityClear();
-          activityAppend('end', 'Upgrade complete');
-        });
-        toast('Upgrade complete'); 
-        await refreshPackagesOnly(); 
-        resolve(); 
-      },
-      onError: async (m) => {
-        // Check if error requires sudo password
-        if (shouldPromptSudo(m)) {
-          try {
-            const password = await showPasswordDialog('upgrade', formulae.concat(casks).join(', ') || 'selected packages');
-            activityClear();
-            activityAppend('start', 'Retrying upgrade with authentication...');
-            // Retry with password using POST to streaming endpoint
-            const response = await fetch('/api/upgrade_stream', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ formulae, casks, sudo_password: password })
-            });
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
-            let currentEvent = '';
-            
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              
-              buffer += decoder.decode(value, { stream: true });
-              const lines = buffer.split('\n');
-              buffer = lines.pop() || '';
-              
-              for (const line of lines) {
-                if (line.startsWith('event: ')) {
-                  currentEvent = line.slice(7);
-                  continue;
-                }
-                if (line.startsWith('data: ')) {
-                  const data = line.slice(6);
-                  if (currentEvent === 'start') activityAppend('start', data);
-                  else if (currentEvent === 'log') activityAppend('log', data);
-                  else if (currentEvent === 'end') {
-                    requestAnimationFrame(() => {
-                      activityClear();
-                      activityAppend('end', 'Upgrade complete');
-                    });
-                    toast('Upgrade complete');
-                    await refreshPackagesOnly();
-                    resolve();
-                    return;
-                  }
-                  else if (currentEvent === 'error') {
-                    activityAppend('error', data);
-                    toast('Upgrade failed');
-                    resolve();
-                    return;
-                  }
-                }
-              }
-            }
-          } catch (passwordErr) {
-            if (passwordErr.message !== 'User cancelled') {
-              activityAppend('error', 'Authentication failed');
-              toast('Authentication failed');
-            }
-            resolve();
-            return;
-          }
-        }
-        
-        // Fallback to non-streaming API
-        try {
-          const res = await api('/api/upgrade', { method: 'POST', body: JSON.stringify({ formulae, casks }) });
-          const logs = res?.logs || {};
-          const blocks = [];
-          if (logs.all) blocks.push(logs.all);
-          if (logs.formulae) blocks.push(logs.formulae);
-          if (logs.casks) blocks.push(logs.casks);
-          for (const block of blocks) {
-            const lines = String(block).split(/\r?\n/);
-            for (const line of lines) if (line.trim()) activityAppend('log', line);
-          }
-          requestAnimationFrame(() => {
-            activityClear();
-            activityAppend('end', 'Upgrade complete');
-          });
-          toast('Upgrade complete');
-          await refreshPackagesOnly();
-        } catch (e) {
-          activityAppend('error', m || e.message || 'Upgrade failed');
-          toast(m || e.message || 'Upgrade failed');
-        }
-        resolve();
-      },
-    });
-  });
+  await upgradePackages(formulae, casks, formulae.concat(casks).join(', ') || 'selected packages');
 }
 
 async function doSearch() {
@@ -832,86 +851,7 @@ function initEvents() {
       const isCask = kind === 'cask';
       const formulae = isCask ? [] : [name];
       const casks = isCask ? [name] : [];
-      withButtonLoading(upOne, () => (async () => {
-        activityClear();
-        const params = new URLSearchParams();
-        for (const f of formulae) params.append('formulae', f);
-        for (const c of casks) params.append('casks', c);
-        const url = `/api/upgrade_stream${params.toString() ? ('?' + params.toString()) : ''}`;
-        return new Promise((resolve) => {
-          streamSSE(url, {
-            onStart: (m) => activityAppend('start', m),
-            onLog: (m) => activityAppend('log', m),
-            onEnd: async () => { 
-              requestAnimationFrame(() => {
-                activityClear();
-                activityAppend('end', 'Upgrade complete');
-              });
-              toast('Upgrade complete'); 
-              await refreshPackagesOnly(); 
-              resolve(); 
-            },
-            onError: async (m) => {
-              if (shouldPromptSudo(m)) {
-                try {
-                  const password = await showPasswordDialog('upgrade', name);
-                  activityClear();
-                  activityAppend('start', 'Retrying upgrade with authentication...');
-                  const response = await fetch('/api/upgrade_stream', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ formulae, casks, sudo_password: password })
-                  });
-                  const reader = response.body.getReader();
-                  const decoder = new TextDecoder();
-                  let buffer = '';
-                  let currentEvent = '';
-                  while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop() || '';
-                    for (const line of lines) {
-                      if (line.startsWith('event: ')) { currentEvent = line.slice(7); continue; }
-                      if (line.startsWith('data: ')) {
-                        const data = line.slice(6);
-                        if (currentEvent === 'start') activityAppend('start', data);
-                        else if (currentEvent === 'log') activityAppend('log', data);
-                        else if (currentEvent === 'end') { requestAnimationFrame(() => { activityClear(); activityAppend('end', 'Upgrade complete'); }); toast('Upgrade complete'); await refreshPackagesOnly(); resolve(); return; }
-                        else if (currentEvent === 'error') { activityAppend('error', data); toast('Upgrade failed'); resolve(); return; }
-                      }
-                    }
-                  }
-                } catch (passwordErr) {
-                  if (passwordErr.message !== 'User cancelled') { activityAppend('error', 'Authentication failed'); toast('Authentication failed'); }
-                  resolve();
-                  return;
-                }
-              }
-              try {
-                const res = await api('/api/upgrade', { method: 'POST', body: JSON.stringify({ formulae, casks }) });
-                const logs = res?.logs || {};
-                const blocks = [];
-                if (logs.all) blocks.push(logs.all);
-                if (logs.formulae) blocks.push(logs.formulae);
-                if (logs.casks) blocks.push(logs.casks);
-                for (const block of blocks) {
-                  const lines = String(block).split(/\r?\n/);
-                  for (const line of lines) if (line.trim()) activityAppend('log', line);
-                }
-                requestAnimationFrame(() => { activityClear(); activityAppend('end', 'Upgrade complete'); });
-                toast('Upgrade complete');
-                await refreshPackagesOnly();
-              } catch (e) {
-                activityAppend('error', m || e.message || 'Upgrade failed');
-                toast(m || e.message || 'Upgrade failed');
-              }
-              resolve();
-            },
-          });
-        });
-      })());
+      withButtonLoading(upOne, () => upgradePackages(formulae, casks, name));
       return; // Prevent also handling uninstall on same click
     }
     // Uninstall buttons (outdated, installed, orphaned sections)
